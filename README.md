@@ -1,14 +1,67 @@
 # 🌐 Live Cyber Map
 
-![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python) ![FastAPI](https://img.shields.io/badge/FastAPI-0.109-009688?logo=fastapi) ![Next.js](https://img.shields.io/badge/Next.js-14-black?logo=next.js) ![Three.js](https://img.shields.io/badge/Three.js-0.160-black?logo=three.js) ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker) ![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-336791?logo=postgresql) ![License](https://img.shields.io/badge/License-MIT-green)
+<div align="center">
 
-A **production-grade real-time global cyber attack visualization platform** built for cybersecurity operations centers. Watch live (simulated) cyber attacks animate as arcs across a 3D interactive globe, powered by a high-throughput event pipeline capable of processing 1,000+ events per second.
+[![Python](https://img.shields.io/badge/Python-3.11-blue?logo=python&logoColor=white)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.109-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![Next.js](https://img.shields.io/badge/Next.js-14-black?logo=next.js&logoColor=white)](https://nextjs.org)
+[![Three.js](https://img.shields.io/badge/Three.js-0.160-black?logo=three.js&logoColor=white)](https://threejs.org)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://docker.com)
+[![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)](https://redis.io)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-336791?logo=postgresql&logoColor=white)](https://postgresql.org)
+[![License](https://img.shields.io/badge/License-MIT-22c55e)](https://choosealicense.com/licenses/mit/)
+
+**A production-grade real-time global cyber attack visualization platform.**
+
+Watch live (simulated) cyber attacks animate as glowing arcs across a dark 3D interactive globe. Built for cybersecurity operations centers, powered by a high-throughput event pipeline capable of processing **1,000+ events per second**.
+
+[Quick Start](#-quick-start) · [Screenshots](#️-screenshots) · [API Reference](#-api-reference) · [Local Development](#-local-development)
+
+</div>
 
 ---
 
-## 🖥️ Live Demo
+## 🖥️ Screenshots
 
-> The platform renders animated arcs from attacker sources to victim destinations on a dark 3D globe, with a live dashboard showing attack rates, anomaly detection, top attacker countries, and a real-time attack feed.
+> **Note:** Place your screenshots in `docs/screenshots/` — see [`docs/screenshots/README.md`](docs/screenshots/README.md) for filenames and capture instructions.
+
+### Globe Overview
+
+![Live Cyber Map – Globe with attack arcs](docs/screenshots/overview.png)
+
+*The 3D globe displays animated attack arcs from source to destination countries. Arc colors correspond to attack type; arc thickness scales with severity.*
+
+---
+
+### Live Dashboard
+
+![Dashboard panel showing stats](docs/screenshots/dashboard.png)
+
+*The left-side panel shows events/second, total event count, rolling average, top attacker countries, top target countries, and a breakdown by attack type — all updating in real time.*
+
+---
+
+### Attack Feed
+
+![Real-time attack feed](docs/screenshots/attack-feed.png)
+
+*The right-side panel lists the 20 most recent attacks with timestamps, source → destination flags, attack-type badge, severity badge (LOW / MED / HIGH / CRIT), and a visual severity bar.*
+
+---
+
+### Anomaly Detection Alert
+
+![Anomaly detection alert banner](docs/screenshots/anomaly-alert.png)
+
+*When the 60-second rolling event rate spikes above the statistical threshold, a pulsing red ⚠ Anomaly Detected banner appears on the dashboard with the anomaly score.*
+
+---
+
+### Replay Mode
+
+![Replay mode controls](docs/screenshots/replay-mode.png)
+
+*Replay mode allows historical attack playback with configurable speed (0.5×–5×). Use the controls to pause, resume, or scrub through recorded events.*
 
 ---
 
@@ -17,64 +70,67 @@ A **production-grade real-time global cyber attack visualization platform** buil
 | Feature | Description |
 |---------|-------------|
 | 🌍 **3D Globe Visualization** | Animated arcs from source to destination, powered by `globe.gl` + Three.js |
-| ⚡ **Real-time Streaming** | WebSocket push from backend to all connected clients |
-| 🎯 **GeoIP Enrichment** | IP → lat/lng/country mapping (in-memory, 50+ countries, no external DB required) |
-| 🔴 **Anomaly Detection** | 60-second sliding window spike detection with alert banner |
-| 🗂️ **Attack Clustering** | Groups events by attack type + source country |
-| ⏮️ **Replay Mode** | Historical attack playback with speed control |
-| 📊 **Live Dashboard** | Events/sec, top attackers, top targets, attack-type breakdown |
-| 📜 **Attack Feed** | Scrolling live feed with severity indicators and flag emojis |
-| 🎨 **Color-coded Attacks** | 9 attack types each with a unique color |
-| 🏗️ **Production-Ready** | Dockerized, Nginx reverse proxy, graceful degradation |
+| ⚡ **Real-time Streaming** | WebSocket push from backend to all connected clients instantly |
+| 🎯 **GeoIP Enrichment** | IP → lat/lng/country mapping (in-memory, 50+ countries, no external API required) |
+| 🔴 **Anomaly Detection** | 60-second sliding-window spike detection with animated alert banner |
+| 🗂️ **Attack Clustering** | Groups events by attack type + source country for pattern analysis |
+| ⏮️ **Replay Mode** | Historical attack playback with adjustable speed control |
+| 📊 **Live Dashboard** | Events/sec, rolling average, top attackers, top targets, attack-type breakdown |
+| 📜 **Attack Feed** | Scrolling live feed with severity indicators and country flag emojis |
+| 🎨 **Color-coded Attacks** | 9 attack types each with a distinct neon color |
+| 🏗️ **Production-Ready** | Dockerized with Nginx reverse proxy, graceful degradation without Redis/PostgreSQL |
 
 ---
 
-## 🏛️ System Architecture
+## 🏛️ Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     CLIENT BROWSER                          │
-│  ┌────────────┐  ┌──────────────┐  ┌───────────────────┐   │
-│  │  3D Globe  │  │  Dashboard   │  │   Attack Feed     │   │
-│  │ (Three.js) │  │  (Stats)     │  │   (Live Events)   │   │
-│  └─────┬──────┘  └──────┬───────┘  └────────┬──────────┘   │
-│        └────────────────┴──────────────────┘               │
-│                         │ WebSocket                         │
-└─────────────────────────┼───────────────────────────────────┘
-                          │
-                    ┌─────▼──────┐
-                    │   Nginx    │ (Reverse Proxy :80)
-                    └─────┬──────┘
-           ┌──────────────┼──────────────┐
-           │              │              │
-     ┌─────▼─────┐  ┌─────▼──────┐      │
-     │  Next.js  │  │  FastAPI   │      │
-     │ Frontend  │  │  Backend   │      │
-     │  :3000    │  │   :8000    │      │
-     └───────────┘  └──────┬─────┘      │
-                           │            │
-              ┌────────────┼────────────┐
-              │            │            │
-        ┌─────▼─────┐ ┌────▼────┐      │
-        │ PostgreSQL│ │  Redis  │      │
-        │  :5432    │ │  :6379  │      │
-        └───────────┘ └─────────┘      │
+│                       CLIENT BROWSER                        │
+│  ┌────────────┐   ┌──────────────┐   ┌───────────────────┐  │
+│  │  3D Globe  │   │  Dashboard   │   │   Attack Feed     │  │
+│  │ (Three.js) │   │  (Stats)     │   │  (Live Events)    │  │
+│  └─────┬──────┘   └──────┬───────┘   └────────┬──────────┘  │
+│        └─────────────────┴────────────────────┘             │
+│                           │ WebSocket                        │
+└───────────────────────────┼──────────────────────────────────┘
+                            │
+                      ┌─────▼──────┐
+                      │   Nginx    │  Reverse Proxy :80
+                      └─────┬──────┘
+             ┌──────────────┴──────────────┐
+             │                             │
+       ┌─────▼─────┐                 ┌─────▼──────┐
+       │  Next.js  │                 │  FastAPI   │
+       │ Frontend  │                 │  Backend   │
+       │  :3000    │                 │   :8000    │
+       └───────────┘                 └──────┬─────┘
+                                            │
+                               ┌────────────┴────────────┐
+                               │                         │
+                         ┌─────▼─────┐             ┌─────▼─────┐
+                         │ PostgreSQL│             │   Redis   │
+                         │  :5432    │             │   :6379   │
+                         └───────────┘             └───────────┘
 ```
 
-### Data Flow
+### Event Pipeline
 
 ```
-AttackGenerator → Queue → AttackProcessor → GeoIP Enrichment
-       ↓                        ↓                   ↓
-  asyncio loop          AnomalyDetector      Cluster Assignment
-                               ↓
-                        Redis Pub/Sub ("attacks" channel)
-                               ↓
-                      WebSocketManager.broadcast()
-                               ↓
-                    All connected browser clients
-                               ↓
-                       globe.gl arc animation
+AttackGenerator ──► asyncio Queue ──► AttackProcessor
+                                            │
+                              ┌─────────────┼─────────────┐
+                              ▼             ▼             ▼
+                         GeoIP Enrich  AnomalyDetect  Cluster Assign
+                                            │
+                                    Redis Pub/Sub
+                                     "attacks" ch
+                                            │
+                               WebSocketManager.broadcast()
+                                            │
+                                  All browser clients
+                                            │
+                                   globe.gl arc render
 ```
 
 ---
@@ -82,90 +138,117 @@ AttackGenerator → Queue → AttackProcessor → GeoIP Enrichment
 ## 🛠️ Tech Stack
 
 | Layer | Technology |
-|-------|-----------|
-| Backend API | Python 3.11, FastAPI, Uvicorn |
-| Real-time | WebSockets, Redis Pub/Sub |
-| Database | PostgreSQL 15, SQLAlchemy (async) |
-| Frontend | Next.js 14, React 18, TypeScript |
-| Visualization | globe.gl, Three.js |
-| Styling | TailwindCSS |
-| Proxy | Nginx |
-| Containers | Docker, Docker Compose |
+|-------|------------|
+| **Backend API** | Python 3.11, FastAPI, Uvicorn |
+| **Real-time** | WebSockets, Redis Pub/Sub |
+| **Database** | PostgreSQL 15, SQLAlchemy (async) |
+| **Frontend** | Next.js 14, React 18, TypeScript |
+| **Visualization** | globe.gl, Three.js |
+| **Styling** | TailwindCSS, Framer Motion |
+| **Proxy** | Nginx |
+| **Containers** | Docker, Docker Compose |
 
 ---
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-- [Docker](https://docs.docker.com/get-docker/) & [Docker Compose](https://docs.docker.com/compose/install/)
+
+- [Docker Desktop](https://docs.docker.com/get-docker/) (includes Docker Compose)
 
 ### 1. Clone and configure
+
 ```bash
 git clone https://github.com/dnlkilonzi-pixel/Live-Cyber-Map.git
 cd Live-Cyber-Map
 cp .env.example .env
 ```
 
-### 2. Launch all services
+### 2. Start all services
+
 ```bash
 docker-compose up --build
 ```
 
+Docker Compose starts five services: **PostgreSQL**, **Redis**, **FastAPI backend**, **Next.js frontend**, and **Nginx**. The first build takes ~2–3 minutes to pull images and install dependencies.
+
 ### 3. Open the app
+
 ```
 http://localhost:80
 ```
+
+The globe will populate with live attack arcs within a few seconds of opening the page.
+
+> **Tip:** To increase the event rate, set `EVENTS_PER_SECOND=200` in your `.env` file before starting.
 
 ---
 
 ## 💻 Local Development
 
 ### Backend
+
 ```bash
 cd backend
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-# Start Redis locally (or use Docker)
+# Start Redis (required for pub/sub)
 docker run -d -p 6379:6379 redis:7-alpine
 
-# Run backend (SQLite fallback if no PostgreSQL)
+# Start the API server (falls back to SQLite if no PostgreSQL)
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+The backend API is available at `http://localhost:8000`. Interactive API docs are at `http://localhost:8000/docs`.
+
 ### Frontend
+
 ```bash
 cd frontend
 npm install
-NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws npm run dev
+NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws \
+NEXT_PUBLIC_API_URL=http://localhost:8000 \
+npm run dev
 ```
-Open http://localhost:3000
+
+Open `http://localhost:3000`.
 
 ---
 
 ## 📡 API Reference
 
+### REST Endpoints
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/health` | Health check (DB + Redis status) |
-| GET | `/api/stats` | Current attack statistics |
-| GET | `/api/attacks/recent?limit=100` | Recent attack events |
-| GET | `/api/attacks/history` | Historical data with filters |
-| POST | `/api/replay/start` | Start replay mode |
-| POST | `/api/replay/stop` | Stop replay mode |
-| WS | `/ws` | WebSocket connection for live events |
+| `GET` | `/api/health` | Health check — returns DB + Redis status |
+| `GET` | `/api/stats` | Current attack statistics snapshot |
+| `GET` | `/api/attacks/recent?limit=100` | Most recent attack events |
+| `GET` | `/api/attacks/history` | Historical events with optional filters |
+| `POST` | `/api/replay/start` | Begin replay of historical data |
+| `POST` | `/api/replay/stop` | Stop replay and resume live mode |
+| `WS` | `/ws` | WebSocket endpoint for live event stream |
 
-### WebSocket Message Types
+### WebSocket — Server → Client Messages
 
 ```json
-{ "type": "attack",  "data": { ...AttackEvent } }
-{ "type": "stats",   "data": { "events_per_second": 48, "is_anomaly": false, ... } }
+// New attack event
+{ "type": "attack",  "data": { "id": "...", "attack_type": "DDoS", "severity": 8, ... } }
+
+// Stats update (sent ~every second)
+{ "type": "stats",   "data": { "events_per_second": 48, "total_events": 12400, "is_anomaly": false } }
+
+// Anomaly alert
 { "type": "anomaly", "data": { "message": "Traffic spike detected", "score": 3.2 } }
-{ "type": "history", "data": [ ...AttackEvent[] ] }
+
+// Historical replay batch
+{ "type": "history", "data": [ /* AttackEvent[] */ ] }
 ```
 
-### WebSocket Commands (client → server)
+### WebSocket — Client → Server Commands
+
 ```json
 { "type": "pause" }
 { "type": "resume" }
@@ -174,52 +257,88 @@ Open http://localhost:3000
 
 ---
 
-## ⚙️ Environment Variables
+## ⚙️ Configuration
+
+All configuration is via environment variables (see `.env.example`).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | SQLite fallback | PostgreSQL connection string |
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection |
-| `EVENTS_PER_SECOND` | `50` | Simulation rate (max ~1000) |
-| `MAX_EVENTS_HISTORY` | `1000` | In-memory history buffer |
+| `DATABASE_URL` | SQLite fallback | PostgreSQL async connection string |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
+| `EVENTS_PER_SECOND` | `50` | Attack simulation rate (max ~1000) |
+| `MAX_EVENTS_HISTORY` | `1000` | In-memory event history buffer size |
 | `CORS_ORIGINS` | `["http://localhost:3000"]` | Allowed CORS origins |
-| `NEXT_PUBLIC_WS_URL` | `ws://localhost:8000/ws` | WebSocket URL for frontend |
-| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | REST API URL for frontend |
+| `NEXT_PUBLIC_WS_URL` | `ws://localhost:8000/ws` | WebSocket URL (consumed by the browser) |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | REST API URL (consumed by the browser) |
+
+> **Graceful degradation:** The backend runs without PostgreSQL (in-memory storage) and without Redis (direct WebSocket broadcast). This makes zero-dependency local development easy.
 
 ---
 
 ## 🎨 Attack Types & Colors
 
-| Attack Type | Color | Frequency |
-|-------------|-------|-----------|
+Each attack type is rendered with a unique neon color on the globe and in the dashboard.
+
+| Attack Type | Arc Color | Frequency |
+|-------------|-----------|-----------|
 | DDoS | 🔴 `#ff4444` | Very Common |
 | Malware | 🟠 `#ff8800` | Common |
 | Phishing | 🟡 `#ffff00` | Common |
+| BruteForce | 🟣 `#ff00ff` | Common |
 | Ransomware | 🩷 `#ff0088` | Moderate |
 | Intrusion | 🩵 `#00ffff` | Moderate |
-| BruteForce | 🟣 `#ff00ff` | Common |
 | SQLInjection | 🟢 `#00ff88` | Moderate |
 | XSS | 🔵 `#8888ff` | Moderate |
 | ZeroDay | ⚪ `#ffffff` | Rare |
+
+Arc **thickness** scales with event severity (1–10). Destination markers glow at the target coordinates.
 
 ---
 
 ## 📈 Performance
 
-- ✅ Handles **1,000+ events/second** (configurable via `EVENTS_PER_SECOND`)
-- ✅ WebSocket broadcasts to **unlimited concurrent clients**
-- ✅ Frontend renders up to **200 simultaneous arcs** with no UI lag
-- ✅ **Batched DB writes** to minimize PostgreSQL pressure
-- ✅ **Graceful degradation** — runs without Redis or PostgreSQL (in-memory only)
+| Metric | Value |
+|--------|-------|
+| Max throughput | **1,000+ events/second** |
+| Concurrent WebSocket clients | Unlimited |
+| Simultaneous globe arcs | Up to **200** with no UI lag |
+| DB write strategy | Batched to minimize PostgreSQL pressure |
+| Fallback mode | In-memory only (no Redis or PostgreSQL needed) |
+
+---
+
+## 🔧 Troubleshooting
+
+**Globe is blank / not loading**
+- Check the browser console for errors.
+- Verify the WebSocket connection: the dashboard header shows `CONNECTED` or `DISCONNECTED`.
+- Ensure the backend is running: `curl http://localhost:8000/api/health`.
+
+**No attack arcs appear**
+- Wait ~5 seconds for the first batch of events.
+- Check `EVENTS_PER_SECOND` in your `.env` — a value of `0` disables the generator.
+
+**`docker-compose up` fails on the backend**
+- The backend waits for PostgreSQL and Redis health checks before starting. If those services are slow, the backend may restart once before succeeding — this is normal.
+- Run `docker-compose logs backend` to inspect errors.
+
+**Port conflicts**
+- Ports `80`, `3000`, `8000`, `5432`, and `6379` must be free. Stop any local Postgres, Redis, or other services using those ports before running Docker Compose.
 
 ---
 
 ## 🤝 Contributing
 
-Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
+Contributions are welcome! For major changes, please open an issue first to discuss what you'd like to change.
+
+1. Fork the repository
+2. Create your feature branch: `git checkout -b feature/my-feature`
+3. Commit your changes: `git commit -m 'Add my feature'`
+4. Push to the branch: `git push origin feature/my-feature`
+5. Open a Pull Request
 
 ---
 
 ## 📄 License
 
-[MIT](https://choosealicense.com/licenses/mit/)
+[MIT](https://choosealicense.com/licenses/mit/) © [dnlkilonzi-pixel](https://github.com/dnlkilonzi-pixel)

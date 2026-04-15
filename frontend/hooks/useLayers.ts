@@ -56,7 +56,9 @@ export function useLayers(): UseLayersReturn {
         // ignore
       }
     }
-  }, [enabledLayers]);
+    // layerData intentionally excluded – it is refreshed on a separate timer
+    // and should not trigger an extra persistence write
+  }, [enabledLayers]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch layer definitions
   useEffect(() => {

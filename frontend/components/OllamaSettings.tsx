@@ -6,10 +6,12 @@
  *   - Pull a new model (input box + pull button)
  *   - Switch the active model
  */
-import { useCallback, useEffect, useState } from "react";import { motion, AnimatePresence } from "framer-motion";
+import { useCallback, useEffect, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { OllamaStatus } from "../types/intelligence";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const OLLAMA_URL = process.env.NEXT_PUBLIC_OLLAMA_URL ?? "http://localhost:11434";
 
 interface ModelInfo {
   name: string;
@@ -79,7 +81,7 @@ export default function OllamaSettings({ onClose, initialStatus }: OllamaSetting
         setPullInput("");
         setTimeout(refresh, 5000);
       } else {
-        setPullMsg(`✗ Pull failed. Is Ollama running at ${API_URL.replace("http://localhost:8000", "localhost:11434")}?`);
+        setPullMsg(`✗ Pull failed. Is Ollama running at ${OLLAMA_URL}?`);
       }
     } catch {
       setPullMsg("✗ Could not reach backend.");

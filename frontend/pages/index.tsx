@@ -76,7 +76,7 @@ export default function Home() {
   const [showAlerts, setShowAlerts] = useState(false);
   const [showOllamaSettings, setShowOllamaSettings] = useState(false);
 
-  useEffect(() => { applyTheme(theme); persist.saveTheme(theme); }, [theme]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { applyTheme(theme); persist.saveTheme(theme); }, [theme]); // eslint-disable-line react-hooks/exhaustive-deps -- persist is a stable object from usePersistSettings (useCallback references)
 
   function handlePlay() {
     sendMessage("start_replay", { speed: replaySpeed });

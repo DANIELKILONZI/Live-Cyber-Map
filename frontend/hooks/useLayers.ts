@@ -55,16 +55,6 @@ export function useLayers(): UseLayersReturn {
     };
   }, []);
 
-  // Auto-fetch data for newly enabled layers
-  useEffect(() => {
-    const enabledIds = Object.keys(enabledLayers).filter((id) => enabledLayers[id]);
-    enabledIds.forEach((id) => {
-      if (!layerData[id] && !fetchingRef.current.has(id)) {
-        fetchLayerData(id);
-      }
-    });
-  }, [enabledLayers]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const fetchLayerData = useCallback(async (layerId: string) => {
     if (fetchingRef.current.has(layerId)) return;
     fetchingRef.current.add(layerId);
@@ -80,6 +70,16 @@ export function useLayers(): UseLayersReturn {
       fetchingRef.current.delete(layerId);
     }
   }, []);
+
+  // Auto-fetch data for newly enabled layers
+  useEffect(() => {
+    const enabledIds = Object.keys(enabledLayers).filter((id) => enabledLayers[id]);
+    enabledIds.forEach((id) => {
+      if (!layerData[id] && !fetchingRef.current.has(id)) {
+        fetchLayerData(id);
+      }
+    });
+  }, [enabledLayers, fetchLayerData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleLayer = useCallback((layerId: string) => {
     setEnabledLayersState((prev) => {

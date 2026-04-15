@@ -61,11 +61,14 @@ export default function Home() {
 
   function handlePlay() {
     sendMessage("start_replay", { speed: replaySpeed });
-    setIsReplaying(true); setReplayProgress(0);
+    setIsReplaying(true);
+    setReplayProgress(0);
   }
   function handleStop() {
     sendMessage("stop_replay");
-    setIsReplaying(false); setReplayProgress(0); setReplayTotal(0);
+    setIsReplaying(false);
+    setReplayProgress(0);
+    setReplayTotal(0);
   }
   function handleSpeedChange(speed: number) {
     setReplaySpeed(speed);
@@ -84,7 +87,12 @@ export default function Home() {
         <meta name="description" content="Real-time global intelligence — cyber, news, finance, geopolitics" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" href="/favicon.ico" />
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" crossOrigin="anonymous" />
+        <link
+          rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"
+          integrity="sha512-Zcn6bjR/8RZbLEpLIeOwNtzREBAJnUKESxces60Mpoj+2okopSAcSUIUOseddDm0cxnGQzxIR7vJgsLZbdLE=="
+          crossOrigin="anonymous"
+        />
       </Head>
 
       <div className="relative w-screen h-screen overflow-hidden" style={{ background: currentTheme.globe.backgroundColor }}>

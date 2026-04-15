@@ -141,7 +141,7 @@ export default function LayerPanel({
 
         {filteredLayers.length === 0 && (
           <div className="px-4 py-6 text-center text-gray-600 text-xs">
-            No layers match &ldquo;{search}&rdquo;
+            No layers match "{search}"
           </div>
         )}
       </div>

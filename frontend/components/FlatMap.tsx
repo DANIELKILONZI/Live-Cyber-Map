@@ -46,17 +46,10 @@ export default function FlatMap({
     const initMap = async () => {
       // Dynamically import leaflet to avoid SSR issues
       const L = (await import("leaflet")).default;
-      // Fix default icon paths broken by webpack
-      // @ts-expect-error – private property
-      delete L.Icon.Default.prototype._getIconUrl;
-      L.Icon.Default.mergeOptions({
-        iconRetinaUrl:
-          "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
-        iconUrl:
-          "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
-        shadowUrl:
-          "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-      });
+      // Fix default icon paths (webpack breaks asset resolution for leaflet icons).
+      // Setting imagePath is the documented approach for CDN-hosted images.
+      L.Icon.Default.imagePath =
+        "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/";
 
       if (!containerRef.current || mapRef.current) return;
 

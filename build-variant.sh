@@ -70,7 +70,7 @@ if [[ "$DESKTOP" == "--desktop" ]]; then
 
   # Install @tauri-apps/cli if not present
   cd "$SCRIPT_DIR"
-  if ! npx --no-install @tauri-apps/cli info &>/dev/null 2>&1; then
+  if ! npx --no-install @tauri-apps/cli info &>/dev/null; then
     npm install --save-dev @tauri-apps/cli@1 --quiet
   fi
 

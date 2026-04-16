@@ -272,6 +272,9 @@ export default function CountryDrilldown({
                   ))}
                 </div>
               )}
+
+              {/* Attack timeline for this country (last 5 min, 30s buckets) */}
+              <AttackTimeline attacks={attacks} countryName={countryName} iso2={iso2} />
             </section>
 
             {/* Financial assets */}
@@ -344,7 +347,67 @@ const ATTACK_COLORS: Record<string, string> = {
   ZeroDay: "#ffffff",
 };
 
-/** Inline SVG multi-series sparkline (risk + cyber + news). No external deps. */
+/** Bar chart showing attacks per 30-second bucket over the last 5 minutes. */
+function AttackTimeline({
+  attacks,
+  countryName,
+  iso2,
+}: {
+  attacks: AttackEvent[];
+  countryName: string;
+  iso2: string;
+}) {
+  const BUCKETS = 10;       // 10 × 30s = 5 min
+  const BUCKET_SEC = 30;
+  const nowSec = Date.now() / 1000;
+
+  // Count attacks per bucket for the selected country
+  const counts = new Array<number>(BUCKETS).fill(0);
+  attacks.forEach((a) => {
+    if (a.source_country !== countryName && a.dest_country !== countryName &&
+        a.source_country !== iso2 && a.dest_country !== iso2) return;
+    const ts = a.timestamp ? new Date(a.timestamp).getTime() / 1000 : 0;
+    const age = nowSec - ts;
+    if (age < 0 || age >= BUCKETS * BUCKET_SEC) return;
+    const bucketIndex = BUCKETS - 1 - Math.floor(age / BUCKET_SEC);
+    if (bucketIndex >= 0 && bucketIndex < BUCKETS) counts[bucketIndex]++;
+  });
+
+  const maxCount = Math.max(...counts, 1);
+  const W = 320;
+  const H = 48;
+  const BAR_W = Math.floor((W - (BUCKETS - 1) * 2) / BUCKETS);
+
+  if (counts.every((c) => c === 0)) return null;
+
+  return (
+    <div className="mt-3 rounded bg-white/5 px-4 py-3">
+      <p className="text-xs text-gray-500 mb-2">Attack timeline (last 5 min, 30s buckets)</p>
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-label="Country attack timeline">
+        {counts.map((count, i) => {
+          const barH = Math.max(2, Math.round((count / maxCount) * (H - 14)));
+          const x = i * (BAR_W + 2);
+          const y = H - 12 - barH;
+          const color = count === 0 ? "#1f2937" : count >= maxCount * 0.75 ? "#f87171" : "#fb923c";
+          return (
+            <g key={i}>
+              <rect x={x} y={y} width={BAR_W} height={barH} fill={color} rx={1} />
+              {count > 0 && (
+                <text x={x + BAR_W / 2} y={H - 1} textAnchor="middle" fill="#6b7280" fontSize={8} fontFamily="monospace">
+                  {count}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+      <div className="flex justify-between text-[9px] text-gray-600 font-mono mt-0.5">
+        <span>−5m</span>
+        <span>now</span>
+      </div>
+    </div>
+  );
+}
 function MultiSeriesSparkline({ points }: { points: TrendPoint[] }) {
   const W = 340;
   const H = 52;

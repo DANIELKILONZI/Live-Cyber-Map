@@ -11,7 +11,7 @@
 
 import dynamic from "next/dynamic";
 import Head from "next/head";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 
 import { useWebSocket } from "../hooks/useWebSocket";
@@ -22,7 +22,7 @@ import { loadSettings, usePersistSettings } from "../hooks/useSettings";
 import { useIsMobile } from "../hooks/useIsMobile";
 
 import Dashboard from "../components/Dashboard";
-import AttackFeed from "../components/AttackFeed";
+import AttackFeed, { AttackFeedHandle } from "../components/AttackFeed";
 import ReplayControls from "../components/ReplayControls";
 
 const Globe = dynamic(() => import("../components/Globe"), { ssr: false });
@@ -75,7 +75,11 @@ export default function Home() {
   const [drilldownCountry, setDrilldownCountry] = useState<string | null>(null);
   const [showAlerts, setShowAlerts] = useState(false);
   const [showOllamaSettings, setShowOllamaSettings] = useState(false);
+  const [showMobileFeed, setShowMobileFeed] = useState(false);
   const [bboxCaptureCallback, setBboxCaptureCallback] = useState<((lat: number, lng: number) => void) | null>(null);
+
+  // Ref for keyboard-driven feed pagination
+  const attackFeedRef = useRef<AttackFeedHandle>(null);
 
   // Unread notification count — cleared when alert panel is opened
   const unreadNotifCount = notifications.filter((n) => !n.read).length;
@@ -95,6 +99,24 @@ export default function Home() {
   }, [reconnectedAt]);
 
   useEffect(() => { applyTheme(theme); persist.saveTheme(theme); }, [theme]); // eslint-disable-line react-hooks/exhaustive-deps -- persist is a stable object from usePersistSettings (useCallback references)
+
+  // ── Keyboard shortcuts ─────────────────────────────────────────────────
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts when typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
+      if (e.key === "Escape") {
+        if (drilldownCountry) { setDrilldownCountry(null); return; }
+        if (showAlerts) { setShowAlerts(false); return; }
+        if (showOllamaSettings) { setShowOllamaSettings(false); return; }
+        if (showMobileFeed) { setShowMobileFeed(false); return; }
+      }
+      if (e.key === "ArrowLeft") attackFeedRef.current?.prevPage();
+      if (e.key === "ArrowRight") attackFeedRef.current?.nextPage();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [drilldownCountry, showAlerts, showOllamaSettings, showMobileFeed]);
 
   // ── Restore state from URL hash (share links) ─────────────────────────
   useEffect(() => {
@@ -133,6 +155,25 @@ export default function Home() {
     } catch {
       alert("Could not capture map — cross-origin tiles may block this in 2D mode.");
     }
+  };
+
+  // ── Export: download attack feed as CSV ────────────────────────────────
+  const handleExportCsv = () => {
+    if (attacks.length === 0) { alert("No attacks to export."); return; }
+    const header = "id,timestamp,source_ip,source_country,dest_ip,dest_country,attack_type,severity";
+    const rows = attacks.map((a) =>
+      [a.id, a.timestamp, a.source_ip, a.source_country, a.dest_ip, a.dest_country, a.attack_type, a.severity]
+        .map((v) => (typeof v === "string" && v.includes(",") ? `"${v}"` : v))
+        .join(",")
+    );
+    const csv = [header, ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `attacks-${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   // ── Share: encode current view state into URL hash ─────────────────────
@@ -336,6 +377,13 @@ export default function Home() {
               💾 PNG
             </button>
             <button
+              onClick={handleExportCsv}
+              className="px-2 py-1 text-xs border border-white/20 text-gray-400 hover:text-white rounded transition-colors"
+              title="Download attack feed as CSV"
+            >
+              📄 CSV
+            </button>
+            <button
               onClick={handleCopyShareLink}
               className="px-2 py-1 text-xs border border-white/20 text-gray-400 hover:text-white rounded transition-colors"
               title="Copy share link"
@@ -426,7 +474,7 @@ export default function Home() {
                 </span>
               </div>
             )}
-            <AttackFeed attacks={attacks} />
+            <AttackFeed ref={attackFeedRef} attacks={attacks} />
           </div>
         )}
 
@@ -442,6 +490,16 @@ export default function Home() {
               className={`flex flex-col items-center gap-0.5 text-xs ${leftPanel === "layers" ? "text-[var(--color-accent)]" : "text-gray-400"}`}>
               <span>🗂️</span>
               <span className="text-[10px]">Layers</span>
+            </button>
+            <button onClick={() => { setShowMobileFeed((v) => !v); handleViewFeed(); }}
+              className={`relative flex flex-col items-center gap-0.5 text-xs ${showMobileFeed ? "text-[var(--color-accent)]" : "text-gray-400"}`}>
+              <span>📡</span>
+              <span className="text-[10px]">Feed</span>
+              {newAttackCount > 0 && (
+                <span className="absolute -top-1 -right-1 flex items-center justify-center w-4 h-4 rounded-full bg-red-600 text-white text-[9px] font-bold leading-none">
+                  {newAttackCount > 9 ? "9+" : newAttackCount}
+                </span>
+              )}
             </button>
             <button onClick={() => toggleRight("intel")}
               className={`flex flex-col items-center gap-0.5 text-xs ${rightPanel === "intel" ? "text-[var(--color-accent)]" : "text-gray-400"}`}>
@@ -465,6 +523,29 @@ export default function Home() {
             </button>
           </div>
         )}
+
+        {/* ── Mobile attack feed bottom-sheet ─────────────────── */}
+        <AnimatePresence>
+          {isMobile && showMobileFeed && (
+            <motion.div
+              key="mobile-feed"
+              initial={{ y: "100%", opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: "100%", opacity: 0 }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="absolute z-25 side-panel overflow-hidden"
+              style={{ left: 0, right: 0, bottom: 48, height: "65vh", borderTopLeftRadius: 12, borderTopRightRadius: 12 }}
+            >
+              <div className="relative h-full">
+                <button
+                  onClick={() => setShowMobileFeed(false)}
+                  className="absolute top-2 right-2 z-10 text-gray-500 hover:text-white text-lg p-1"
+                >×</button>
+                <AttackFeed attacks={attacks} />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* ── Financial ticker (bottom) ───────────────────── */}
         <AnimatePresence>

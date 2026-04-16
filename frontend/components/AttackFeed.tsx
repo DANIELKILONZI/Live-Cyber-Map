@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useImperativeHandle, forwardRef, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { format } from "date-fns";
 import { AttackEvent, AttackType } from "../types/attack";
@@ -61,7 +61,15 @@ interface AttackFeedProps {
   attacks: AttackEvent[];
 }
 
-export default function AttackFeed({ attacks }: AttackFeedProps) {
+export interface AttackFeedHandle {
+  prevPage: () => void;
+  nextPage: () => void;
+}
+
+const AttackFeed = forwardRef<AttackFeedHandle, AttackFeedProps>(function AttackFeed(
+  { attacks },
+  ref
+) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [page, setPage] = useState(0);
 
@@ -69,6 +77,12 @@ export default function AttackFeed({ attacks }: AttackFeedProps) {
   // Clamp page in case attacks shrink
   const safePage = Math.min(page, totalPages - 1);
   const pageItems = attacks.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+
+  // Expose page navigation to parent via ref
+  useImperativeHandle(ref, () => ({
+    prevPage: () => setPage((p) => Math.max(0, p - 1)),
+    nextPage: () => setPage((p) => Math.min(totalPages - 1, p + 1)),
+  }), [totalPages]);
 
   // Scroll to top when we're on page 0 and new events arrive
   const prevLengthRef = useRef(attacks.length);
@@ -99,8 +113,13 @@ export default function AttackFeed({ attacks }: AttackFeedProps) {
         className="flex-1 overflow-y-auto dashboard-scroll glass-panel p-2 space-y-1"
       >
         {pageItems.length === 0 ? (
-          <div className="flex items-center justify-center h-32 text-gray-600 text-xs">
-            Waiting for attacks…
+          <div className="flex flex-col items-center justify-center h-32 gap-2 text-gray-600">
+            <svg width="36" height="36" viewBox="0 0 36 36" fill="none" aria-hidden="true">
+              <circle cx="18" cy="18" r="16" stroke="#374151" strokeWidth="2" />
+              <path d="M10 18 Q18 8 26 18 Q18 28 10 18Z" stroke="#4b5563" strokeWidth="1.5" fill="none" />
+              <circle cx="18" cy="18" r="3" fill="#4b5563" />
+            </svg>
+            <span className="text-xs">Waiting for attacks…</span>
           </div>
         ) : (
           <AnimatePresence initial={false}>
@@ -213,4 +232,6 @@ export default function AttackFeed({ attacks }: AttackFeedProps) {
       )}
     </div>
   );
-}
+});
+
+export default AttackFeed;

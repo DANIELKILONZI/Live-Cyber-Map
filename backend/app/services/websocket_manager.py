@@ -10,8 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections import defaultdict
-from typing import Dict, Optional, Set
+from typing import Dict, List, Optional, Set
 
 from fastapi import WebSocket
 
@@ -19,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 _REDIS_CHANNEL = "attacks"
 _MAX_CONNECTIONS_PER_IP = 5
+# Rate-limit: max new WS connections per IP per time window
+_WS_RATE_WINDOW = 60.0   # seconds
+_WS_RATE_MAX = 20        # new connections allowed per window per IP
 
 
 class WebSocketManager:
@@ -30,8 +34,10 @@ class WebSocketManager:
         self._sub_task: Optional[asyncio.Task] = None  # type: ignore[type-arg]
         # Channel → set of WebSockets (for future targeted broadcasts)
         self._channels: Dict[str, Set[WebSocket]] = {}
-        # Per-IP connection count for rate-limiting
+        # Per-IP connection count for connection-count limiting
         self._ip_counts: Dict[str, int] = defaultdict(int)
+        # Per-IP connection timestamps for rate-limiting (sliding window)
+        self._ip_connect_times: Dict[str, List[float]] = defaultdict(list)
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -40,19 +46,38 @@ class WebSocketManager:
     async def connect(self, websocket: WebSocket) -> bool:
         """Accept and register a new WebSocket connection.
 
-        Returns False and rejects the connection if the client IP already
-        has *_MAX_CONNECTIONS_PER_IP* or more active connections.
+        Returns False and rejects the connection if:
+        - the client IP already has *_MAX_CONNECTIONS_PER_IP* or more active connections, OR
+        - the client IP has made *_WS_RATE_MAX* or more new connections in the last
+          *_WS_RATE_WINDOW* seconds (connection rate-limit).
         """
         client_ip = self._get_ip(websocket)
+
+        # --- Connection-count limit ---
         if self._ip_counts[client_ip] >= _MAX_CONNECTIONS_PER_IP:
             logger.warning(
                 "WS connection refused for %s — already at %d connections",
                 client_ip, _MAX_CONNECTIONS_PER_IP,
             )
-            # Must accept before closing in Starlette
             await websocket.accept()
             await websocket.close(code=1008, reason="Too many connections from this IP")
             return False
+
+        # --- Connection rate-limit (sliding window) ---
+        now = time.time()
+        window_start = now - _WS_RATE_WINDOW
+        self._ip_connect_times[client_ip] = [
+            t for t in self._ip_connect_times[client_ip] if t > window_start
+        ]
+        if len(self._ip_connect_times[client_ip]) >= _WS_RATE_MAX:
+            logger.warning(
+                "WS connection rate-limit hit for %s — %d attempts in %.0fs",
+                client_ip, len(self._ip_connect_times[client_ip]), _WS_RATE_WINDOW,
+            )
+            await websocket.accept()
+            await websocket.close(code=1008, reason="Connection rate limit exceeded")
+            return False
+        self._ip_connect_times[client_ip].append(now)
 
         await websocket.accept()
         self._active.add(websocket)

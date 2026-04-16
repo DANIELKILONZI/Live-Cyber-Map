@@ -1,0 +1,271 @@
+"""Unit tests for AlertService.check_anomaly_score and attack-feed pagination.
+
+These tests run entirely in-process and do not require Redis, PostgreSQL, or
+any other external service.
+"""
+
+from __future__ import annotations
+
+import math
+import time
+from types import SimpleNamespace
+
+import pytest
+
+from app.services.alert_service import AlertService
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_rule(
+    rule_id: int,
+    condition: str = "anomaly_score",
+    threshold: float | None = 0.5,
+    enabled: bool = True,
+    target: str | None = None,
+) -> SimpleNamespace:
+    """Return a lightweight stub that duck-types AlertRule for the service."""
+    return SimpleNamespace(
+        id=rule_id,
+        name=f"Rule {rule_id}",
+        condition=condition,
+        threshold=threshold,
+        target=target,
+        bbox=None,
+        enabled=enabled,
+    )
+
+
+# ---------------------------------------------------------------------------
+# check_anomaly_score
+# ---------------------------------------------------------------------------
+
+class TestCheckAnomalyScore:
+    """Tests for AlertService.check_anomaly_score."""
+
+    @pytest.mark.anyio
+    async def test_fires_when_score_exceeds_threshold(self):
+        svc = AlertService()
+        await svc.reload_rules([_make_rule(1, threshold=0.5)])
+        fired = await svc.check_anomaly_score(0.9)
+        assert len(fired) == 1
+        assert fired[0].rule_id == 1
+        assert fired[0].condition == "anomaly_score"
+        assert "0.90" in fired[0].message
+        assert "0.50" in fired[0].message
+
+    @pytest.mark.anyio
+    async def test_does_not_fire_when_score_equals_threshold(self):
+        svc = AlertService()
+        await svc.reload_rules([_make_rule(1, threshold=0.5)])
+        fired = await svc.check_anomaly_score(0.5)
+        assert len(fired) == 0
+
+    @pytest.mark.anyio
+    async def test_does_not_fire_when_score_below_threshold(self):
+        svc = AlertService()
+        await svc.reload_rules([_make_rule(1, threshold=0.5)])
+        fired = await svc.check_anomaly_score(0.3)
+        assert len(fired) == 0
+
+    @pytest.mark.anyio
+    async def test_does_not_fire_for_disabled_rule(self):
+        svc = AlertService()
+        await svc.reload_rules([_make_rule(1, threshold=0.5, enabled=False)])
+        fired = await svc.check_anomaly_score(1.0)
+        assert len(fired) == 0
+
+    @pytest.mark.anyio
+    async def test_does_not_fire_when_threshold_is_none(self):
+        svc = AlertService()
+        await svc.reload_rules([_make_rule(1, threshold=None)])
+        fired = await svc.check_anomaly_score(1.0)
+        assert len(fired) == 0
+
+    @pytest.mark.anyio
+    async def test_does_not_fire_for_wrong_condition(self):
+        svc = AlertService()
+        await svc.reload_rules([_make_rule(1, condition="risk_above", threshold=0.5)])
+        fired = await svc.check_anomaly_score(1.0)
+        assert len(fired) == 0
+
+    @pytest.mark.anyio
+    async def test_fires_multiple_rules_independently(self):
+        svc = AlertService()
+        await svc.reload_rules([
+            _make_rule(1, threshold=0.5),
+            _make_rule(2, threshold=0.8),
+        ])
+        # score=0.7: only rule 1 (threshold 0.5) should fire
+        fired_one = await svc.check_anomaly_score(0.7)
+        assert len(fired_one) == 1
+        assert fired_one[0].rule_id == 1
+
+        # Fresh service to avoid cooldown interference
+        svc2 = AlertService()
+        await svc2.reload_rules([
+            _make_rule(1, threshold=0.5),
+            _make_rule(2, threshold=0.8),
+        ])
+        # score=0.9: both rules should fire
+        fired_both = await svc2.check_anomaly_score(0.9)
+        assert len(fired_both) == 2
+        rule_ids = {a.rule_id for a in fired_both}
+        assert rule_ids == {1, 2}
+
+    @pytest.mark.anyio
+    async def test_cooldown_prevents_duplicate_alerts(self):
+        svc = AlertService()
+        svc._cooldown = 3600.0  # 1 hour — should not re-fire within this test
+        await svc.reload_rules([_make_rule(1, threshold=0.5)])
+
+        # First call fires
+        fired1 = await svc.check_anomaly_score(1.0)
+        assert len(fired1) == 1
+
+        # Immediate second call is suppressed by the cooldown
+        fired2 = await svc.check_anomaly_score(1.0)
+        assert len(fired2) == 0
+
+    @pytest.mark.anyio
+    async def test_fires_again_after_cooldown_expires(self):
+        svc = AlertService()
+        svc._cooldown = 0.05  # 50 ms
+        await svc.reload_rules([_make_rule(1, threshold=0.5)])
+
+        fired1 = await svc.check_anomaly_score(1.0)
+        assert len(fired1) == 1
+
+        # Backdate last_fired to simulate cooldown expiry
+        svc._last_fired[1] = time.time() - 1.0
+
+        fired2 = await svc.check_anomaly_score(1.0)
+        assert len(fired2) == 1
+
+    @pytest.mark.anyio
+    async def test_zero_score_never_fires(self):
+        svc = AlertService()
+        await svc.reload_rules([_make_rule(1, threshold=0.0)])
+        # threshold=0.0 means score > 0.0 fires; score == 0.0 should NOT fire
+        fired = await svc.check_anomaly_score(0.0)
+        assert len(fired) == 0
+
+    @pytest.mark.anyio
+    async def test_message_format(self):
+        svc = AlertService()
+        await svc.reload_rules([_make_rule(1, threshold=1.5)])
+        fired = await svc.check_anomaly_score(2.75)
+        assert len(fired) == 1
+        assert "2.75" in fired[0].message
+        assert "1.50" in fired[0].message
+
+    @pytest.mark.anyio
+    async def test_empty_rules_returns_empty_list(self):
+        svc = AlertService()
+        await svc.reload_rules([])
+        fired = await svc.check_anomaly_score(100.0)
+        assert fired == []
+
+
+# ---------------------------------------------------------------------------
+# Attack-feed pagination logic (pure Python, no HTTP)
+# ---------------------------------------------------------------------------
+
+class TestAttackFeedPagination:
+    """Verify the pagination arithmetic used by GET /api/attacks/recent.
+
+    The endpoint slices a ring-buffer; we test the logic in isolation here
+    so we don't need to spin up the full app.
+    """
+
+    PAGE_SIZE = 20
+
+    def _paginate(self, total: int, page: int) -> tuple[int, int, int]:
+        """Return (total_pages, page_start, page_end) for a given total & page."""
+        total_pages = max(1, math.ceil(total / self.PAGE_SIZE))
+        safe_page = min(page, total_pages - 1)
+        start = safe_page * self.PAGE_SIZE
+        end = start + self.PAGE_SIZE
+        return total_pages, start, end
+
+    def test_first_page_starts_at_zero(self):
+        _, start, _ = self._paginate(total=50, page=0)
+        assert start == 0
+
+    def test_first_page_ends_at_page_size(self):
+        _, _, end = self._paginate(total=50, page=0)
+        assert end == self.PAGE_SIZE
+
+    def test_second_page_starts_at_page_size(self):
+        _, start, _ = self._paginate(total=50, page=1)
+        assert start == self.PAGE_SIZE
+
+    def test_total_pages_rounds_up(self):
+        total_pages, _, _ = self._paginate(total=21, page=0)
+        assert total_pages == 2
+
+    def test_total_pages_exact_multiple(self):
+        total_pages, _, _ = self._paginate(total=40, page=0)
+        assert total_pages == 2
+
+    def test_page_clamped_when_out_of_range(self):
+        # Requesting page 999 with only 50 items should give the last page
+        total_pages, start, _ = self._paginate(total=50, page=999)
+        assert total_pages == 3
+        # Last page index is 2, start = 40
+        assert start == 40
+
+    def test_empty_list_gives_single_page(self):
+        total_pages, start, end = self._paginate(total=0, page=0)
+        assert total_pages == 1
+        assert start == 0
+        assert end == self.PAGE_SIZE
+
+    def test_exactly_one_page(self):
+        total_pages, start, end = self._paginate(total=self.PAGE_SIZE, page=0)
+        assert total_pages == 1
+        assert start == 0
+        assert end == self.PAGE_SIZE
+
+    def test_page_one_beyond_last_is_clamped(self):
+        # total=40 → 2 pages (0 and 1); requesting page 2 should clamp to 1
+        total_pages, start, _ = self._paginate(total=40, page=2)
+        assert total_pages == 2
+        assert start == self.PAGE_SIZE  # page 1
+
+
+# ---------------------------------------------------------------------------
+# AlertService.check_country_risk (bonus coverage)
+# ---------------------------------------------------------------------------
+
+class TestCheckCountryRisk:
+    """Spot-check the country-risk alert path."""
+
+    @pytest.mark.anyio
+    async def test_fires_when_risk_exceeds_threshold(self):
+        svc = AlertService()
+        rule = _make_rule(10, condition="risk_above", threshold=70.0)
+        rule.target = "RU"
+        await svc.reload_rules([rule])
+        fired = await svc.check_country_risk("RU", 85.0)
+        assert len(fired) == 1
+        assert "85" in fired[0].message
+
+    @pytest.mark.anyio
+    async def test_does_not_fire_below_threshold(self):
+        svc = AlertService()
+        rule = _make_rule(10, condition="risk_above", threshold=70.0)
+        rule.target = "RU"
+        await svc.reload_rules([rule])
+        fired = await svc.check_country_risk("RU", 60.0)
+        assert len(fired) == 0
+
+    @pytest.mark.anyio
+    async def test_wrong_country_does_not_fire(self):
+        svc = AlertService()
+        rule = _make_rule(10, condition="risk_above", threshold=70.0)
+        rule.target = "RU"
+        await svc.reload_rules([rule])
+        fired = await svc.check_country_risk("CN", 99.0)
+        assert len(fired) == 0

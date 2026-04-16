@@ -35,6 +35,7 @@ export default function AlertRuleManager({ onClose, onBboxCapture }: AlertRuleMa
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [rulesPage, setRulesPage] = useState(0);
+  const [importError, setImportError] = useState<string | null>(null);
 
   // Inline-edit state
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -165,7 +166,20 @@ export default function AlertRuleManager({ onClose, onBboxCapture }: AlertRuleMa
     const reader = new FileReader();
     reader.onload = async (ev) => {
       try {
-        const imported: AlertRule[] = JSON.parse(ev.target?.result as string);
+        const raw = ev.target?.result as string;
+        let imported: AlertRule[];
+        try {
+          imported = JSON.parse(raw);
+        } catch {
+          setImportError("Invalid JSON — could not parse the selected file.");
+          setTimeout(() => setImportError(null), 4000);
+          return;
+        }
+        if (!Array.isArray(imported)) {
+          setImportError("Invalid format — expected a JSON array of rules.");
+          setTimeout(() => setImportError(null), 4000);
+          return;
+        }
         for (const rule of imported) {
           await fetch(`${API_URL}/api/alerts/rules`, {
             method: "POST",
@@ -182,7 +196,8 @@ export default function AlertRuleManager({ onClose, onBboxCapture }: AlertRuleMa
         }
         await fetchRules();
       } catch {
-        // Silently ignore malformed files
+        setImportError("Import failed — please try again.");
+        setTimeout(() => setImportError(null), 4000);
       }
     };
     reader.readAsText(file);
@@ -260,11 +275,32 @@ export default function AlertRuleManager({ onClose, onBboxCapture }: AlertRuleMa
           </div>
 
           <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto scrollbar-thin">
+            {/* Import error toast */}
+            <AnimatePresence>
+              {importError && (
+                <motion.div
+                  key="import-error"
+                  initial={{ opacity: 0, y: -8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  className="flex items-center gap-2 px-3 py-2 rounded border border-red-600/60 bg-red-900/40 text-red-300 text-xs"
+                >
+                  <span>⚠</span>
+                  <span>{importError}</span>
+                </motion.div>
+              )}
+            </AnimatePresence>
             {/* Existing rules */}
             {loading ? (
               <div className="text-xs text-gray-500 text-center py-4">Loading…</div>
             ) : rules.length === 0 ? (
-              <div className="text-xs text-gray-600 text-center py-4">No alert rules yet. Create one below.</div>
+              <div className="flex flex-col items-center gap-2 text-gray-600 py-6">
+                <svg width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+                  <circle cx="20" cy="20" r="18" stroke="#374151" strokeWidth="2" />
+                  <path d="M13 20h14M20 13v14" stroke="#4b5563" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+                <span className="text-xs">No alert rules yet. Create one below.</span>
+              </div>
             ) : (() => {
               const totalRulesPages = Math.max(1, Math.ceil(rules.length / RULES_PER_PAGE));
               const safeRulesPage = Math.min(rulesPage, totalRulesPages - 1);

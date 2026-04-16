@@ -29,13 +29,15 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install ruff pytest pytest-asyncio anyio httpx
+          pip install ruff pytest pytest-asyncio anyio httpx pytest-cov
 
       - name: Lint with ruff
         run: ruff check . --select E,F,W,I --ignore E501
 
-      - name: Run tests
-        run: pytest tests/ -v --tb=short --ignore=tests/integration || true
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --tb=short --ignore=tests/integration \
+            --cov=app --cov-report=term-missing --cov-fail-under=30
         env:
           DATABASE_URL: "sqlite+aiosqlite:///:memory:"
           REDIS_URL: "redis://localhost:6379"
@@ -176,6 +178,43 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose down -v
+
+  # ── Publish backend Docker image to GHCR (main branch only) ────────────
+  publish-ghcr:
+    name: Publish backend image to GHCR
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [backend, docker-smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/backend
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
   # ── Tauri desktop build (main branch only) ──────────────────────────────
   tauri-build:

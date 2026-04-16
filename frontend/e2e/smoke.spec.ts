@@ -24,7 +24,10 @@ test.describe("Global Intelligence Dashboard", () => {
     ).toBeVisible({ timeout: 15_000 });
 
     // The live / offline badge must be present (either state is acceptable)
-    const badge = page.locator("text=LIVE, text=OFFLINE").first();
+    const badge = page
+      .locator("text=LIVE")
+      .or(page.locator("text=OFFLINE"))
+      .first();
     await expect(badge).toBeVisible({ timeout: 15_000 });
 
     // Take screenshot for visual regression archive

@@ -7,7 +7,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js&logoColor=white)](https://nextjs.org)
 [![Tauri](https://img.shields.io/badge/Tauri-1.6-FFC131?logo=tauri&logoColor=white)](https://tauri.app)
 [![Ollama](https://img.shields.io/badge/Ollama-Local%20AI-white)](https://ollama.ai)
-[![Three.js](https://img.shields.io/badge/Three.js-0.160-black?logo=three.js&logoColor=white)](https://threejs.org)
+[![Three.js](https://img.shields.io/badge/Three.js-0.179-black?logo=three.js&logoColor=white)](https://threejs.org)
 [![Leaflet](https://img.shields.io/badge/Leaflet-1.9-199900?logo=leaflet&logoColor=white)](https://leafletjs.com)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://docker.com)
 [![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)](https://redis.io)

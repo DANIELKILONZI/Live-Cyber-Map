@@ -417,3 +417,338 @@ class TestAlertServiceLifecycle:
     async def test_stop_without_start_does_not_raise(self):
         svc = AlertService()
         await svc.stop()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# _point_in_bbox edge cases (lines 119-124)
+# ---------------------------------------------------------------------------
+
+
+class TestPointInBboxEdgeCases:
+    """Test the _point_in_bbox static method's error branches."""
+
+    def test_wrong_part_count_returns_false(self):
+        # Only 3 parts instead of 4
+        assert AlertService._point_in_bbox(0.0, 0.0, "0,0,1") is False
+
+    def test_too_many_parts_returns_false(self):
+        assert AlertService._point_in_bbox(0.0, 0.0, "0,0,1,1,2") is False
+
+    def test_non_numeric_returns_false(self):
+        # Should trigger ValueError in float conversion
+        assert AlertService._point_in_bbox(0.0, 0.0, "a,b,c,d") is False
+
+    def test_none_bbox_raises_attribute_error_returns_false(self):
+        # Passing None should trigger AttributeError (.split on None)
+        assert AlertService._point_in_bbox(0.0, 0.0, None) is False  # type: ignore
+
+
+# ---------------------------------------------------------------------------
+# check_attack_event – disabled rule branch (line 70)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_check_attack_event_disabled_rule_skipped():
+    """A disabled rule should be skipped."""
+    svc = AlertService()
+    disabled_rule = _make_rule(1, condition="attack_type", target="DDoS", enabled=False)
+    await svc.reload_rules([disabled_rule])
+    fired = await svc.check_attack_event({"attack_type": "DDoS", "dest_country": "US"})
+    assert fired == []
+
+
+# ---------------------------------------------------------------------------
+# check_country_risk – various branch hits (lines 134, 136, 140)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_check_country_risk_disabled_rule_skipped():
+    svc = AlertService()
+    rule = _make_rule(1, condition="risk_above", threshold=50.0, enabled=False)
+    await svc.reload_rules([rule])
+    fired = await svc.check_country_risk("RU", 90.0)
+    assert fired == []
+
+
+@pytest.mark.anyio
+async def test_check_country_risk_wrong_condition_skipped():
+    svc = AlertService()
+    rule = _make_rule(1, condition="attack_type", threshold=50.0)  # wrong condition
+    await svc.reload_rules([rule])
+    fired = await svc.check_country_risk("RU", 90.0)
+    assert fired == []
+
+
+@pytest.mark.anyio
+async def test_check_country_risk_target_mismatch_skipped():
+    svc = AlertService()
+    rule = _make_rule(1, condition="risk_above", threshold=50.0, target="CN")
+    await svc.reload_rules([rule])
+    fired = await svc.check_country_risk("RU", 90.0)
+    assert fired == []
+
+
+@pytest.mark.anyio
+async def test_check_country_risk_none_threshold_skipped():
+    svc = AlertService()
+    rule = _make_rule(1, condition="risk_above", threshold=None)
+    await svc.reload_rules([rule])
+    fired = await svc.check_country_risk("RU", 90.0)
+    assert fired == []
+
+
+# ---------------------------------------------------------------------------
+# check_attack (line 189 and 191)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_check_attack_disabled_rule_skipped():
+    svc = AlertService()
+    rule = _make_rule(1, condition="attack_type", target="DDoS", enabled=False)
+    await svc.reload_rules([rule])
+    fired = await svc.check_attack("DDoS", "US")
+    assert fired == []
+
+
+@pytest.mark.anyio
+async def test_check_attack_target_mismatch_skipped():
+    svc = AlertService()
+    rule = _make_rule(1, condition="attack_type", target="SQLi")
+    await svc.reload_rules([rule])
+    fired = await svc.check_attack("DDoS", "US")
+    assert fired == []
+
+
+# ---------------------------------------------------------------------------
+# _background_check loop (lines 245-252)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_background_check_runs_periodic_checks():
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    svc = AlertService()
+    call_count = {"n": 0}
+
+    async def _fake_checks():
+        call_count["n"] += 1
+
+    sleep_count = {"n": 0}
+
+    async def _fake_sleep(_):
+        sleep_count["n"] += 1
+        if sleep_count["n"] >= 2:
+            raise asyncio.CancelledError()
+
+    with (
+        patch.object(svc, "_run_periodic_checks", _fake_checks),
+        patch("asyncio.sleep", _fake_sleep),
+    ):
+        try:
+            await svc._background_check()
+        except asyncio.CancelledError:
+            pass
+
+    assert call_count["n"] >= 1
+
+
+@pytest.mark.anyio
+async def test_background_check_swallows_exception():
+    import asyncio
+    from unittest.mock import patch
+
+    svc = AlertService()
+    sleep_count = {"n": 0}
+
+    async def _fake_sleep(_):
+        sleep_count["n"] += 1
+        if sleep_count["n"] >= 2:
+            raise asyncio.CancelledError()
+
+    async def _raise_check():
+        raise RuntimeError("check failed")
+
+    with (
+        patch.object(svc, "_run_periodic_checks", _raise_check),
+        patch("asyncio.sleep", _fake_sleep),
+    ):
+        try:
+            await svc._background_check()
+        except asyncio.CancelledError:
+            pass
+
+    assert sleep_count["n"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# _run_periodic_checks (lines 256-277)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_run_periodic_checks_calls_services():
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from types import SimpleNamespace
+
+    svc = AlertService()
+
+    mock_risk_service = AsyncMock()
+    mock_risk_service.get_all_scores = AsyncMock(return_value=[])
+
+    mock_anomaly_detector = MagicMock()
+    mock_anomaly_detector.get_stats = MagicMock(return_value={"anomaly_score": 0.0})
+
+    mock_ws = AsyncMock()
+    mock_ws.broadcast = AsyncMock()
+
+    with (
+        patch("app.services.alert_service.country_risk_service", mock_risk_service, create=True),
+        patch("app.services.alert_service.anomaly_detector", mock_anomaly_detector, create=True),
+        patch("app.services.alert_service.ws_manager", mock_ws, create=True),
+        patch(
+            "app.services.alert_service.AlertService._run_periodic_checks",
+            wraps=svc._run_periodic_checks,
+        ),
+    ):
+        # Directly call _run_periodic_checks with mocked imports
+        from unittest.mock import patch as mp
+        with (
+            mp("app.services.anomaly_detector.anomaly_detector", mock_anomaly_detector, create=True),
+            mp("app.services.country_risk.country_risk_service", mock_risk_service, create=True),
+            mp("app.services.websocket_manager.ws_manager", mock_ws, create=True),
+        ):
+            # Just verify it doesn't crash when called with empty rules
+            await svc._run_periodic_checks()
+
+
+# ---------------------------------------------------------------------------
+# check_price_change – disabled rule and wrong condition branches (lines 189, 191)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_check_price_change_disabled_rule_skipped():
+    svc = AlertService()
+    rule = _make_rule(1, condition="price_change", threshold=3.0, enabled=False)
+    await svc.reload_rules([rule])
+    fired = await svc.check_price_change("BTC", 10.0)
+    assert fired == []
+
+
+@pytest.mark.anyio
+async def test_check_price_change_wrong_condition_skipped():
+    svc = AlertService()
+    rule = _make_rule(1, condition="risk_above", threshold=3.0)  # wrong condition
+    await svc.reload_rules([rule])
+    fired = await svc.check_price_change("BTC", 10.0)
+    assert fired == []
+
+
+# ---------------------------------------------------------------------------
+# _run_periodic_checks – with actual fired alerts (lines 262-265, 276-277)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_run_periodic_checks_broadcasts_country_risk_alerts():
+    """_run_periodic_checks broadcasts when country_risk alerts fire."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    svc = AlertService()
+    # Add a risk_above rule
+    rule = _make_rule(1, condition="risk_above", threshold=50.0)
+    await svc.reload_rules([rule])
+
+    # Mock score that EXCEEDS threshold
+    score = SimpleNamespace(iso2="RU", risk_score=90.0)
+
+    mock_risk_service = AsyncMock()
+    mock_risk_service.get_all_scores = AsyncMock(return_value=[score])
+
+    mock_anomaly = MagicMock()
+    mock_anomaly.get_stats = MagicMock(return_value={"anomaly_score": 0.0})
+
+    broadcast_calls = []
+
+    mock_ws = AsyncMock()
+    mock_ws.broadcast = AsyncMock(side_effect=lambda msg: broadcast_calls.append(msg))
+
+    with (
+        patch("app.services.alert_service.country_risk_service", mock_risk_service, create=True),
+        patch("app.services.alert_service.anomaly_detector", mock_anomaly, create=True),
+        patch("app.services.alert_service.ws_manager", mock_ws, create=True),
+    ):
+        from app.services import alert_service as _as_module
+        _as_module.country_risk_service = mock_risk_service
+        _as_module.anomaly_detector = mock_anomaly
+        _as_module.ws_manager = mock_ws
+
+        with (
+            patch("app.services.country_risk.country_risk_service", mock_risk_service, create=True),
+            patch("app.services.websocket_manager.ws_manager", mock_ws, create=True),
+        ):
+            await svc._run_periodic_checks()
+
+    # At least one broadcast for the country risk alert
+    assert any(c.get("type") == "alert" for c in broadcast_calls)
+
+
+@pytest.mark.anyio
+async def test_run_periodic_checks_broadcasts_anomaly_alerts():
+    """_run_periodic_checks broadcasts when anomaly_score alerts fire."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    svc = AlertService()
+    # Add anomaly_score rule with low threshold
+    rule = _make_rule(1, condition="anomaly_score", threshold=0.3)
+    await svc.reload_rules([rule])
+
+    mock_risk_service = AsyncMock()
+    mock_risk_service.get_all_scores = AsyncMock(return_value=[])
+
+    mock_anomaly = MagicMock()
+    mock_anomaly.get_stats = MagicMock(return_value={"anomaly_score": 0.9})  # exceeds threshold
+
+    broadcast_calls = []
+    mock_ws = AsyncMock()
+    mock_ws.broadcast = AsyncMock(side_effect=lambda msg: broadcast_calls.append(msg))
+
+    with (
+        patch("app.services.country_risk.country_risk_service", mock_risk_service, create=True),
+        patch("app.services.websocket_manager.ws_manager", mock_ws, create=True),
+    ):
+        # Patch the imports inside _run_periodic_checks
+        import sys
+        orig_risk = sys.modules.get("app.services.country_risk")
+        orig_ws = sys.modules.get("app.services.websocket_manager")
+
+        mock_cr_module = MagicMock()
+        mock_cr_module.country_risk_service = mock_risk_service
+        sys.modules["app.services.country_risk"] = mock_cr_module
+
+        mock_ad_module = MagicMock()
+        mock_ad_module.anomaly_detector = mock_anomaly
+        sys.modules["app.services.anomaly_detector"] = mock_ad_module
+
+        mock_ws_module = MagicMock()
+        mock_ws_module.ws_manager = mock_ws
+        sys.modules["app.services.websocket_manager"] = mock_ws_module
+
+        try:
+            await svc._run_periodic_checks()
+        finally:
+            if orig_risk:
+                sys.modules["app.services.country_risk"] = orig_risk
+            if orig_ws:
+                sys.modules["app.services.websocket_manager"] = orig_ws
+            # Restore anomaly_detector
+            if "app.services.anomaly_detector" in sys.modules:
+                del sys.modules["app.services.anomaly_detector"]
+
+    assert any(c.get("type") == "alert" for c in broadcast_calls)

@@ -315,3 +315,167 @@ async def test_rate_limit_uses_client_host_when_no_forwarded_for(client):
     resp = await client.get("/api/attacks/recent")
     assert resp.status_code == 429
     _rl_counts.pop(test_ip, None)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/replay – status
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_replay_status(client):
+    resp = await client.get("/api/replay")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "active" in body
+    assert "speed" in body
+
+
+# ---------------------------------------------------------------------------
+# POST /api/replay/start
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_replay_start(client):
+    from app.services.websocket_manager import ws_manager
+
+    with patch.object(ws_manager, "broadcast", new_callable=AsyncMock):
+        resp = await client.post("/api/replay/start?speed=2.0")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["speed"] == 2.0
+    assert "replay started" in body["status"]
+
+
+@pytest.mark.asyncio
+async def test_replay_start_default_speed(client):
+    from app.services.websocket_manager import ws_manager
+
+    with patch.object(ws_manager, "broadcast", new_callable=AsyncMock):
+        resp = await client.post("/api/replay/start")
+    assert resp.status_code == 200
+    assert resp.json()["speed"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# POST /api/replay/stop
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_replay_stop(client):
+    from app.services.websocket_manager import ws_manager
+
+    with patch.object(ws_manager, "broadcast", new_callable=AsyncMock):
+        resp = await client.post("/api/replay/stop")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "replay stopped" in body["status"]
+
+
+# ---------------------------------------------------------------------------
+# POST /api/replay/seek
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_replay_seek_empty_db(db_client):
+    from app.services.websocket_manager import ws_manager
+
+    with patch.object(ws_manager, "broadcast", new_callable=AsyncMock):
+        resp = await db_client.post("/api/replay/seek?position=0")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["position"] == 0
+    assert body["status"] == "seek"
+
+
+@pytest.mark.asyncio
+async def test_replay_seek_with_position(db_client):
+    from app.services.websocket_manager import ws_manager
+
+    with patch.object(ws_manager, "broadcast", new_callable=AsyncMock):
+        resp = await db_client.post("/api/replay/seek?position=42")
+    assert resp.status_code == 200
+    assert resp.json()["position"] == 42
+
+
+@pytest.mark.asyncio
+async def test_replay_seek_broadcasts_attack_events(db_client):
+    """When events exist in DB, seek broadcasts them."""
+    from datetime import datetime, timezone
+
+    from app.models.attack import AttackEvent
+    from app.services.websocket_manager import ws_manager
+
+    # Insert a row so the seek query has something to broadcast
+    from app.core.database import get_db as real_get_db
+
+    override = app.dependency_overrides.get(real_get_db)
+    if override:
+        async for session in override():
+            event = AttackEvent(
+                source_ip="1.2.3.4",
+                source_country="US",
+                source_lat=37.0,
+                source_lng=-120.0,
+                dest_ip="5.6.7.8",
+                dest_country="CN",
+                dest_lat=39.9,
+                dest_lng=116.4,
+                attack_type="DDoS",
+                severity=5,
+                timestamp=datetime.now(timezone.utc),
+            )
+            session.add(event)
+            await session.commit()
+            break
+
+    broadcast_calls = []
+
+    async def capture_broadcast(msg):
+        broadcast_calls.append(msg)
+
+    with patch.object(ws_manager, "broadcast", side_effect=capture_broadcast):
+        resp = await db_client.post("/api/replay/seek?position=0")
+
+    assert resp.status_code == 200
+    # At least the replay_seek message + the attack event
+    assert any(c.get("type") == "replay_seek" for c in broadcast_calls)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/attacks/history – filter parameters
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_attacks_history_with_attack_type_filter(db_client):
+    resp = await db_client.get("/api/attacks/history?attack_type=DDoS")
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+
+
+@pytest.mark.asyncio
+async def test_attacks_history_with_source_country_filter(db_client):
+    resp = await db_client.get("/api/attacks/history?source_country=US")
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_attacks_history_with_dest_country_filter(db_client):
+    resp = await db_client.get("/api/attacks/history?dest_country=CN")
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_attacks_history_with_severity_range(db_client):
+    resp = await db_client.get("/api/attacks/history?min_severity=3&max_severity=8")
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_attacks_history_with_offset(db_client):
+    resp = await db_client.get("/api/attacks/history?limit=10&offset=5")
+    assert resp.status_code == 200

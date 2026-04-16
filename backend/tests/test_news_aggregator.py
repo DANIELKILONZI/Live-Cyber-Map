@@ -481,3 +481,241 @@ async def test_stop_cancels_task():
 async def test_stop_noop_if_never_started():
     agg = _make_aggregator()
     await agg.stop()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# _background_fetch – loop iteration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_background_fetch_calls_fetch_all_feeds():
+    agg = _make_aggregator()
+
+    call_count = {"n": 0}
+
+    async def fake_fetch():
+        call_count["n"] += 1
+
+    sleep_count = {"n": 0}
+
+    async def fake_sleep(_):
+        sleep_count["n"] += 1
+        if sleep_count["n"] >= 1:
+            raise asyncio.CancelledError()
+
+    with (
+        patch.object(agg, "_fetch_all_feeds", fake_fetch),
+        patch("asyncio.sleep", fake_sleep),
+    ):
+        try:
+            await agg._background_fetch()
+        except asyncio.CancelledError:
+            pass
+
+    assert call_count["n"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_background_fetch_swallows_exception():
+    agg = _make_aggregator()
+
+    sleep_count = {"n": 0}
+
+    async def fake_sleep(_):
+        sleep_count["n"] += 1
+        if sleep_count["n"] >= 2:
+            raise asyncio.CancelledError()
+
+    async def raise_once():
+        raise RuntimeError("parse error")
+
+    with (
+        patch.object(agg, "_fetch_all_feeds", raise_once),
+        patch("asyncio.sleep", fake_sleep),
+    ):
+        try:
+            await agg._background_fetch()
+        except asyncio.CancelledError:
+            pass
+
+    assert sleep_count["n"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# _fetch_all_feeds – integration-level mocked httpx
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_all_feeds_deduplicates():
+    """Same URL appearing in two feeds should produce only one item."""
+    agg = _make_aggregator()
+
+    # Build a minimal list of feeds that all return the same article URL
+    feed = _make_feed()
+    duplicate_feeds = [feed, {**feed, "name": "Copy"}]
+
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.text = _RSS_SIMPLE
+    mock_resp.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_resp)
+
+    with (
+        patch("app.services.news_aggregator.ALL_FEEDS", duplicate_feeds),
+        patch("app.services.news_aggregator.httpx.AsyncClient", return_value=mock_client),
+        patch.object(agg, "_persist_news", new_callable=AsyncMock),
+    ):
+        await agg._fetch_all_feeds()
+
+    # RSS simple has 2 distinct articles; they appear twice but dedup reduces to 2
+    assert len(agg._all_items) == 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_all_feeds_stores_up_to_500():
+    """More than 500 items should be truncated to 500."""
+    agg = _make_aggregator()
+
+    # Generate enough items by patching _fetch_feed to return many items
+    big_items = [
+        __import__("app.services.news_aggregator", fromlist=["NewsItem"]).NewsItem(
+            str(i),
+            f"Title {i}",
+            "",
+            f"https://example.com/{i}",
+            "src",
+            "world",
+            "global",
+            float(i),
+        )
+        for i in range(600)
+    ]
+
+    async def _fake_fetch_feed(client, feed):
+        return big_items[:30]
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    feeds = [_make_feed(f"Feed{i}", f"https://f{i}.com/rss") for i in range(25)]
+    with (
+        patch("app.services.news_aggregator.ALL_FEEDS", feeds),
+        patch("app.services.news_aggregator.httpx.AsyncClient", return_value=mock_client),
+        patch.object(agg, "_fetch_feed", _fake_fetch_feed),
+        patch.object(agg, "_persist_news", new_callable=AsyncMock),
+    ):
+        await agg._fetch_all_feeds()
+
+    assert len(agg._all_items) <= 500
+
+
+@pytest.mark.asyncio
+async def test_fetch_all_feeds_writes_redis_cache():
+    agg = _make_aggregator()
+    mock_redis = AsyncMock()
+    mock_redis.setex = AsyncMock()
+    agg.set_redis(mock_redis)
+
+    feed = _make_feed()
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.text = _RSS_SIMPLE
+    mock_resp.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_resp)
+
+    with (
+        patch("app.services.news_aggregator.ALL_FEEDS", [feed]),
+        patch("app.services.news_aggregator.httpx.AsyncClient", return_value=mock_client),
+        patch.object(agg, "_persist_news", new_callable=AsyncMock),
+    ):
+        await agg._fetch_all_feeds()
+
+    mock_redis.setex.assert_called_once()
+    args = mock_redis.setex.call_args[0]
+    assert args[0] == "intelligence:news"
+
+
+@pytest.mark.asyncio
+async def test_fetch_all_feeds_redis_write_failure_does_not_crash():
+    agg = _make_aggregator()
+    mock_redis = AsyncMock()
+    mock_redis.setex = AsyncMock(side_effect=RuntimeError("redis down"))
+    agg.set_redis(mock_redis)
+
+    feed = _make_feed()
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.text = _RSS_SIMPLE
+    mock_resp.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_resp)
+
+    with (
+        patch("app.services.news_aggregator.ALL_FEEDS", [feed]),
+        patch("app.services.news_aggregator.httpx.AsyncClient", return_value=mock_client),
+        patch.object(agg, "_persist_news", new_callable=AsyncMock),
+    ):
+        await agg._fetch_all_feeds()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# _persist_news – DB upsert
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_persist_news_swallows_db_error():
+    """_persist_news is fire-and-forget and should swallow all errors."""
+    items = [
+        __import__("app.services.news_aggregator", fromlist=["NewsItem"]).NewsItem(
+            "abc123",
+            "Test Title",
+            "Summary",
+            "https://example.com/1",
+            "TestSource",
+            "world",
+            "global",
+            1700000000.0,
+        )
+    ]
+    with patch(
+        "app.core.database.AsyncSessionLocal",
+        side_effect=RuntimeError("no db"),
+    ):
+        await __import__(
+            "app.services.news_aggregator", fromlist=["NewsAggregator"]
+        ).NewsAggregator._persist_news(items)
+
+
+@pytest.mark.asyncio
+async def test_persist_news_sqlite_raises_pg_specific():
+    """On SQLite, postgresql insert dialect will raise; should be swallowed."""
+    from app.services.news_aggregator import NewsAggregator, NewsItem
+
+    items = [
+        NewsItem(
+            "xyz",
+            "Title",
+            "Summary",
+            "https://example.com/xyz",
+            "Src",
+            "world",
+            "global",
+            1700000000.0,
+        )
+    ]
+    # _persist_news uses pg_insert which isn't available in SQLite;
+    # ImportError or dialect error should be swallowed.
+    with patch("app.core.database.AsyncSessionLocal", side_effect=ImportError("pg")):
+        await NewsAggregator._persist_news(items)  # should not raise

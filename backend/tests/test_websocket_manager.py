@@ -8,7 +8,7 @@ subscription, Redis helpers, and the _get_ip static method.
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -327,3 +327,174 @@ def test_get_ip_returns_unknown_on_exception():
     ws = MagicMock()
     ws.headers.get = MagicMock(side_effect=RuntimeError("broken"))
     assert WebSocketManager._get_ip(ws) == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# start_redis_subscriber / stop_redis_subscriber
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_start_redis_subscriber_creates_task():
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    mgr = WebSocketManager()
+    mock_redis = AsyncMock()
+    mgr._redis = mock_redis
+
+    # Make _redis_listener do nothing so the task completes quickly
+    async def _noop():
+        pass
+
+    with patch.object(mgr, "_redis_listener", _noop):
+        await mgr.start_redis_subscriber()
+        # Give the task a moment to start
+        await asyncio.sleep(0)
+        assert mgr._sub_task is not None
+        await mgr.stop_redis_subscriber()
+
+
+@pytest.mark.asyncio
+async def test_start_redis_subscriber_no_redis_logs_warning():
+    mgr = WebSocketManager()
+    mgr._redis = None  # no redis
+    await mgr.start_redis_subscriber()
+    assert mgr._sub_task is None  # task not created
+
+
+@pytest.mark.asyncio
+async def test_stop_redis_subscriber_noop_when_no_task():
+    mgr = WebSocketManager()
+    mgr._sub_task = None
+    await mgr.stop_redis_subscriber()  # should not raise
+
+
+@pytest.mark.asyncio
+async def test_stop_redis_subscriber_cancels_task():
+    import asyncio
+
+    mgr = WebSocketManager()
+
+    async def _forever():
+        while True:
+            await asyncio.sleep(10)
+
+    mgr._sub_task = asyncio.create_task(_forever())
+    await mgr.stop_redis_subscriber()
+    assert mgr._sub_task.done()
+
+
+# ---------------------------------------------------------------------------
+# _redis_listener – message forwarding, bad JSON, CancelledError, generic exc
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_redis_listener_forwards_message():
+    import asyncio
+    import json
+
+    mgr = WebSocketManager()
+
+    # Build a mock pubsub that yields one message then ends
+    messages = [
+        {"type": "subscribe", "data": 1},  # should be skipped
+        {"type": "message", "data": json.dumps({"source_ip": "1.2.3.4"})},
+    ]
+
+    async def _aiterable():
+        for m in messages:
+            yield m
+
+    mock_pubsub = AsyncMock()
+    mock_pubsub.subscribe = AsyncMock()
+    mock_pubsub.listen = _aiterable
+
+    mock_redis = AsyncMock()
+    mock_redis.pubsub = MagicMock(return_value=mock_pubsub)
+    mgr._redis = mock_redis
+
+    broadcast_calls = []
+
+    async def _capture(msg):
+        broadcast_calls.append(msg)
+
+    with patch.object(mgr, "broadcast", side_effect=_capture):
+        await mgr._redis_listener()
+
+    # One broadcast call for the "message" type entry
+    assert len(broadcast_calls) == 1
+    assert broadcast_calls[0]["type"] == "attack"
+
+
+@pytest.mark.asyncio
+async def test_redis_listener_skips_bad_json():
+    import asyncio
+
+    mgr = WebSocketManager()
+
+    messages = [
+        {"type": "message", "data": "not valid json {{"},
+    ]
+
+    async def _aiterable():
+        for m in messages:
+            yield m
+
+    mock_pubsub = AsyncMock()
+    mock_pubsub.subscribe = AsyncMock()
+    mock_pubsub.listen = _aiterable
+
+    mock_redis = AsyncMock()
+    mock_redis.pubsub = MagicMock(return_value=mock_pubsub)
+    mgr._redis = mock_redis
+
+    broadcast_calls = []
+
+    with patch.object(mgr, "broadcast", new_callable=AsyncMock) as mock_broadcast:
+        await mgr._redis_listener()
+
+    mock_broadcast.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_redis_listener_handles_cancelled_error():
+    import asyncio
+
+    mgr = WebSocketManager()
+
+    async def _aiterable():
+        raise asyncio.CancelledError()
+        yield  # make it an async generator
+
+    mock_pubsub = AsyncMock()
+    mock_pubsub.subscribe = AsyncMock()
+    mock_pubsub.listen = _aiterable
+
+    mock_redis = AsyncMock()
+    mock_redis.pubsub = MagicMock(return_value=mock_pubsub)
+    mgr._redis = mock_redis
+
+    # CancelledError should be swallowed and not propagate
+    await mgr._redis_listener()
+
+
+@pytest.mark.asyncio
+async def test_redis_listener_handles_generic_exception():
+    mgr = WebSocketManager()
+
+    async def _aiterable():
+        raise RuntimeError("pubsub broken")
+        yield  # make it an async generator
+
+    mock_pubsub = AsyncMock()
+    mock_pubsub.subscribe = AsyncMock()
+    mock_pubsub.listen = _aiterable
+
+    mock_redis = AsyncMock()
+    mock_redis.pubsub = MagicMock(return_value=mock_pubsub)
+    mgr._redis = mock_redis
+
+    # Generic exception should be caught and logged, not re-raised
+    await mgr._redis_listener()

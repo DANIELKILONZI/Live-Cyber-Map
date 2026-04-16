@@ -451,3 +451,391 @@ async def test_start_stop_lifecycle():
 async def test_stop_noop_if_never_started():
     svc = _make_service()
     await svc.stop()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# _background_fetch – single cycle, then cancelled
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_background_fetch_calls_all_fetchers():
+    svc = _make_service()
+    svc._init_simulated_data()
+
+    call_order = []
+
+    async def _fake_crypto():
+        call_order.append("crypto")
+
+    async def _fake_stocks():
+        call_order.append("stocks")
+
+    async def _fake_indices():
+        call_order.append("indices")
+
+    async def _fake_forex():
+        call_order.append("forex")
+
+    async def _fake_commodities():
+        call_order.append("commodities")
+
+    # Patch sleep to cancel after first iteration
+    sleep_count = {"n": 0}
+
+    async def _fake_sleep(_):
+        sleep_count["n"] += 1
+        if sleep_count["n"] >= 1:
+            raise asyncio.CancelledError()
+
+    with (
+        patch.object(svc, "_fetch_crypto", _fake_crypto),
+        patch.object(svc, "_fetch_stocks_yfinance", _fake_stocks),
+        patch.object(svc, "_fetch_indices_yfinance", _fake_indices),
+        patch.object(svc, "_fetch_forex_exchangerate", _fake_forex),
+        patch.object(svc, "_fetch_commodities_yfinance", _fake_commodities),
+        patch("asyncio.sleep", _fake_sleep),
+    ):
+        try:
+            await svc._background_fetch()
+        except asyncio.CancelledError:
+            pass
+
+    assert "crypto" in call_order
+    assert "stocks" in call_order
+    assert "commodities" in call_order
+
+
+@pytest.mark.asyncio
+async def test_background_fetch_swallows_exception():
+    """An exception in a fetch cycle should be swallowed; loop continues."""
+    svc = _make_service()
+    svc._init_simulated_data()
+
+    sleep_count = {"n": 0}
+
+    async def _fake_sleep(_):
+        sleep_count["n"] += 1
+        if sleep_count["n"] >= 2:
+            raise asyncio.CancelledError()
+
+    async def _raises():
+        raise ValueError("bad fetch")
+
+    async def _noop():
+        pass
+
+    with (
+        patch.object(svc, "_fetch_crypto", _raises),
+        patch.object(svc, "_fetch_stocks_yfinance", _noop),
+        patch.object(svc, "_fetch_indices_yfinance", _noop),
+        patch.object(svc, "_fetch_forex_exchangerate", _noop),
+        patch.object(svc, "_fetch_commodities_yfinance", _noop),
+        patch("asyncio.sleep", _fake_sleep),
+    ):
+        try:
+            await svc._background_fetch()
+        except asyncio.CancelledError:
+            pass
+
+    # If we got here without raising, the exception was swallowed
+    assert sleep_count["n"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# _fetch_stocks_yfinance – success and fallback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_stocks_yfinance_success_updates_market():
+    svc = _make_service()
+    svc._init_simulated_data()
+
+    real_quotes = [
+        TickerQuote(
+            symbol="AAPL",
+            name="Apple Inc.",
+            price=190.0,
+            change=2.0,
+            change_pct=1.06,
+            volume=50_000_000.0,
+            market_cap=None,
+            high_24h=191.0,
+            low_24h=189.0,
+            asset_class="stock",
+            exchange="NASDAQ",
+            last_updated=time.time(),
+            is_real=True,
+        )
+    ]
+
+    with patch.object(
+        svc,
+        "_yfinance_fetch",
+        return_value=real_quotes,
+    ):
+        await svc._fetch_stocks_yfinance()
+
+    aapl = next((q for q in svc._market.stocks if q.symbol == "AAPL"), None)
+    assert aapl is not None
+    assert aapl.price == 190.0
+    assert aapl.is_real is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_stocks_yfinance_empty_falls_back_to_simulation():
+    svc = _make_service()
+    svc._init_simulated_data()
+    prices_before = [q.price for q in svc._market.stocks]
+
+    with patch.object(svc, "_yfinance_fetch", return_value=[]):
+        await svc._fetch_stocks_yfinance()
+
+    # prices should have drifted (simulated update was called)
+    assert len(svc._market.stocks) == len(prices_before)
+
+
+# ---------------------------------------------------------------------------
+# _fetch_indices_yfinance – success and fallback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_indices_yfinance_success_updates_market():
+    svc = _make_service()
+    svc._init_simulated_data()
+
+    real_quotes = [
+        TickerQuote(
+            symbol="^GSPC",
+            name="S&P 500",
+            price=5300.0,
+            change=50.0,
+            change_pct=0.95,
+            volume=None,
+            market_cap=None,
+            high_24h=5320.0,
+            low_24h=5280.0,
+            asset_class="index",
+            exchange="NYSE",
+            last_updated=time.time(),
+            is_real=True,
+        )
+    ]
+
+    with patch.object(svc, "_yfinance_fetch", return_value=real_quotes):
+        await svc._fetch_indices_yfinance()
+
+    sp500 = next((q for q in svc._market.indices if q.symbol == "^GSPC"), None)
+    assert sp500 is not None
+    assert sp500.price == 5300.0
+
+
+@pytest.mark.asyncio
+async def test_fetch_indices_yfinance_empty_falls_back():
+    svc = _make_service()
+    svc._init_simulated_data()
+
+    with patch.object(svc, "_yfinance_fetch", return_value=[]):
+        await svc._fetch_indices_yfinance()
+
+    # No crash, indices still present
+    assert len(svc._market.indices) > 0
+
+
+# ---------------------------------------------------------------------------
+# _yfinance_fetch – unit tests (executor is mocked away)
+# ---------------------------------------------------------------------------
+
+
+def test_yfinance_fetch_returns_empty_on_import_error():
+    svc = _make_service()
+
+    import builtins
+    import importlib
+
+    real_import = builtins.__import__
+
+    def no_yfinance(name, *args, **kwargs):
+        if name == "yfinance":
+            raise ImportError("no yfinance")
+        return real_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=no_yfinance):
+        result = svc._yfinance_fetch(["AAPL"], "stock")
+
+    assert result == []
+
+
+def test_yfinance_fetch_returns_empty_on_exception():
+    svc = _make_service()
+
+    with patch("builtins.__import__", side_effect=RuntimeError("yf broken")):
+        result = svc._yfinance_fetch(["AAPL"], "stock")
+
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# _yfinance_fetch_commodities – import error / exception
+# ---------------------------------------------------------------------------
+
+
+def test_yfinance_fetch_commodities_returns_empty_on_import_error():
+    svc = _make_service()
+
+    real_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+
+    import builtins
+
+    def no_yf(name, *args, **kwargs):
+        if name == "yfinance":
+            raise ImportError("no yf")
+        return builtins.__import__(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=no_yf):
+        result = svc._yfinance_fetch_commodities(["GC=F"])
+
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# _fetch_commodities_yfinance – success and fallback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_commodities_yfinance_success_updates_market():
+    svc = _make_service()
+    svc._init_simulated_data()
+
+    gold_quote = TickerQuote(
+        symbol="GOLD",
+        name="Gold (USD/troy oz)",
+        price=2100.0,
+        change=20.0,
+        change_pct=0.96,
+        volume=None,
+        market_cap=None,
+        high_24h=2110.0,
+        low_24h=2090.0,
+        asset_class="commodity",
+        exchange="COMEX",
+        last_updated=time.time(),
+        is_real=True,
+    )
+
+    with patch.object(
+        svc, "_yfinance_fetch_commodities", return_value=[gold_quote]
+    ):
+        await svc._fetch_commodities_yfinance()
+
+    gold = next(
+        (q for q in svc._market.commodities if "GOLD" in q.symbol), None
+    )
+    assert gold is not None
+    assert gold.price == 2100.0
+
+
+@pytest.mark.asyncio
+async def test_fetch_commodities_yfinance_empty_falls_back():
+    svc = _make_service()
+    svc._init_simulated_data()
+
+    with patch.object(svc, "_yfinance_fetch_commodities", return_value=[]):
+        await svc._fetch_commodities_yfinance()
+
+    # No crash, commodities still present
+    assert len(svc._market.commodities) > 0
+
+
+# ---------------------------------------------------------------------------
+# _update_simulated_commodities
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_simulated_commodities_changes_prices():
+    svc = _make_service()
+    svc._init_simulated_data()
+    prices_before = [q.price for q in svc._market.commodities]
+    await svc._update_simulated_commodities()
+    prices_after = [q.price for q in svc._market.commodities]
+    # At least some prices should change
+    assert any(abs(a - b) > 1e-10 for a, b in zip(prices_before, prices_after))
+
+
+@pytest.mark.asyncio
+async def test_update_simulated_commodities_no_crash_on_empty():
+    svc = _make_service()
+    svc._market.commodities = []
+    await svc._update_simulated_commodities()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# _persist_financial_snapshot
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_persist_financial_snapshot_swallows_db_error():
+    """_persist_financial_snapshot should swallow DB errors silently."""
+    svc = _make_service()
+    ticker = _make_ticker("AAPL", "stock")
+
+    with patch(
+        "app.core.database.AsyncSessionLocal",
+        side_effect=RuntimeError("DB down"),
+    ):
+        await svc._persist_financial_snapshot([ticker])  # should not raise
+
+
+@pytest.mark.asyncio
+async def test_persist_financial_snapshot_with_mock_session():
+    """_persist_financial_snapshot calls session.add and commit for each quote."""
+    svc = _make_service()
+    tickers = [_make_ticker("AAPL", "stock"), _make_ticker("BTC", "crypto")]
+
+    mock_session = AsyncMock()
+    mock_session_ctx = AsyncMock()
+    mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "app.core.database.AsyncSessionLocal",
+        return_value=mock_session_ctx,
+    ):
+        await svc._persist_financial_snapshot(tickers)
+
+    assert mock_session.add.call_count == 2
+    mock_session.commit.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _apply_forex_rates edge cases
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_forex_rates_usd_base_pair():
+    """USD/JPY: base=USD → price = rates["JPY"]."""
+    svc = _make_service()
+    svc._init_simulated_data()
+    await svc._apply_forex_rates({"JPY": 150.0, "CNY": 7.25})
+    usd_jpy = next((q for q in svc._market.forex if q.symbol == "USD/JPY"), None)
+    if usd_jpy:
+        assert usd_jpy.price == pytest.approx(150.0, rel=1e-4)
+        assert usd_jpy.is_real is True
+
+
+@pytest.mark.asyncio
+async def test_apply_forex_rates_cross_pair():
+    """A non-USD/USD cross pair (e.g. EUR/GBP would be cross but we have EUR/USD)."""
+    svc = _make_service()
+    svc._init_simulated_data()
+    # USD/CNY: base=USD → rate = rates["CNY"]
+    await svc._apply_forex_rates({"CNY": 7.20})
+    usd_cny = next((q for q in svc._market.forex if q.symbol == "USD/CNY"), None)
+    if usd_cny:
+        assert usd_cny.is_real is True

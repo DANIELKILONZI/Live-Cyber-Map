@@ -225,3 +225,92 @@ def test_country_to_iso2_unknown_returns_none(svc):
 
 def test_country_to_iso2_case_insensitive(svc):
     assert svc._country_to_iso2("GERMANY") == "DE"
+
+
+# ---------------------------------------------------------------------------
+# _background_update loop (lines 295-302)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_background_update_runs_recompute():
+    """_background_update calls _recompute_scores and loops."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    from app.services.country_risk import CountryRiskService
+
+    svc = CountryRiskService()
+    call_count = {"n": 0}
+
+    async def fake_recompute():
+        call_count["n"] += 1
+
+    sleep_count = {"n": 0}
+
+    async def fake_sleep(_):
+        sleep_count["n"] += 1
+        if sleep_count["n"] >= 2:
+            raise asyncio.CancelledError()
+
+    with (
+        patch.object(svc, "_recompute_scores", fake_recompute),
+        patch("asyncio.sleep", fake_sleep),
+    ):
+        try:
+            await svc._background_update()
+        except asyncio.CancelledError:
+            pass
+
+    assert call_count["n"] >= 1
+
+
+@pytest.mark.anyio
+async def test_background_update_swallows_exception():
+    """Non-CancelledError exceptions in _background_update are swallowed."""
+    import asyncio
+    from unittest.mock import patch
+
+    from app.services.country_risk import CountryRiskService
+
+    svc = CountryRiskService()
+
+    sleep_count = {"n": 0}
+
+    async def fake_sleep(_):
+        sleep_count["n"] += 1
+        if sleep_count["n"] >= 3:
+            raise asyncio.CancelledError()
+
+    async def raise_recompute():
+        raise RuntimeError("recompute failed")
+
+    with (
+        patch.object(svc, "_recompute_scores", raise_recompute),
+        patch("asyncio.sleep", fake_sleep),
+    ):
+        try:
+            await svc._background_update()
+        except asyncio.CancelledError:
+            pass
+
+    assert sleep_count["n"] >= 2
+
+
+# ---------------------------------------------------------------------------
+# _persist_snapshots exception handling (line 401)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_persist_snapshots_swallows_error():
+    """_persist_snapshots should swallow DB errors silently."""
+    from unittest.mock import patch
+
+    from app.services.country_risk import CountryRiskService
+
+    with patch(
+        "app.core.database.AsyncSessionLocal",
+        side_effect=RuntimeError("DB gone"),
+    ):
+        await CountryRiskService._persist_snapshots([])  # should not raise

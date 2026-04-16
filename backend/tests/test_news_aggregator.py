@@ -719,3 +719,67 @@ async def test_persist_news_sqlite_raises_pg_specific():
     # ImportError or dialect error should be swallowed.
     with patch("app.core.database.AsyncSessionLocal", side_effect=ImportError("pg")):
         await NewsAggregator._persist_news(items)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# _parse_date ISO fallback exception (lines 562-563)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_date_iso_fromisoformat_exception():
+    """When regex matches but fromisoformat raises, the except is hit."""
+    from app.services.news_aggregator import NewsAggregator
+
+    # "9999-99-99T99:99:99" matches the regex but fromisoformat will raise
+    # because month 99 is invalid
+    result = NewsAggregator._parse_date("9999-99-99T99:99:99")
+    # Falls back to time.time()
+    import time
+    assert abs(result - time.time()) < 5
+
+
+# ---------------------------------------------------------------------------
+# _persist_news body coverage (lines 602-619) – with real SQLite session
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_persist_news_with_sqlite_session():
+    """_persist_news runs its full body when given a real SQLite session."""
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+    from unittest.mock import patch
+
+    from app.core.database import Base
+    from app.services.news_aggregator import NewsAggregator, NewsItem
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with engine.begin() as conn:
+        from app.models import alert, attack, financial, intelligence  # noqa: F401
+
+        await conn.run_sync(Base.metadata.create_all)
+
+    TestSession = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
+    )
+
+    items = [
+        NewsItem(
+            "news_abc123",
+            "Test Title",
+            "Summary text",
+            "https://example.com/news/1",
+            "TestSource",
+            "world",
+            "global",
+            1700000000.0,
+        )
+    ]
+
+    with patch("app.core.database.AsyncSessionLocal", TestSession):
+        await NewsAggregator._persist_news(items)  # should not raise
+
+    await engine.dispose()

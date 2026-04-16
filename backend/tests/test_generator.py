@@ -188,3 +188,121 @@ async def test_generator_puts_events_on_queue():
     await asyncio.sleep(0.15)  # at 1 eps default, should get at least 1 event
     await gen.stop()
     assert queue.qsize() >= 1
+
+
+# ---------------------------------------------------------------------------
+# Generator loop edge cases (lines 101, 167-168, 172-174)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_loop_queue_full_drops_event():
+    """When the queue is full, QueueFull is caught and event is dropped."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from app.services.generator import AttackGenerator
+
+    queue = asyncio.Queue(maxsize=1)
+    queue.put_nowait({"id": "filler"})  # Fill queue to maxsize
+
+    gen = AttackGenerator(queue)
+    gen._running = True
+
+    call_count = {"n": 0}
+
+    async def fake_generate_event():
+        call_count["n"] += 1
+        return {"id": "new_event", "type": "test"}
+
+    sleep_count = {"n": 0}
+
+    async def fake_sleep(_):
+        sleep_count["n"] += 1
+        if sleep_count["n"] >= 1:
+            gen._running = False
+            raise asyncio.CancelledError()
+
+    with (
+        patch.object(gen, "generate_event", fake_generate_event),
+        patch("asyncio.sleep", fake_sleep),
+    ):
+        try:
+            await gen._loop()
+        except asyncio.CancelledError:
+            pass
+
+    # QueueFull should have been swallowed, and generate was called
+    assert call_count["n"] >= 1
+
+
+@pytest.mark.anyio
+async def test_loop_swallows_exception():
+    """Generic exception in generate_event is swallowed and loop continues."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    from app.services.generator import AttackGenerator
+
+    queue = asyncio.Queue()
+    gen = AttackGenerator(queue)
+    gen._running = True
+
+    call_count = {"n": 0}
+
+    async def fake_generate_raises():
+        call_count["n"] += 1
+        raise RuntimeError("generate failed")
+
+    sleep_count = {"n": 0}
+
+    async def fake_sleep(_):
+        sleep_count["n"] += 1
+        if sleep_count["n"] >= 2:
+            gen._running = False
+            raise asyncio.CancelledError()
+
+    with (
+        patch.object(gen, "generate_event", fake_generate_raises),
+        patch("asyncio.sleep", fake_sleep),
+    ):
+        try:
+            await gen._loop()
+        except asyncio.CancelledError:
+            pass
+
+    assert call_count["n"] >= 1
+    assert sleep_count["n"] >= 2
+
+
+# ---------------------------------------------------------------------------
+# generate_event – empty dst_weights fallback (line 101)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_generate_event_dst_weights_fallback():
+    """When all target countries are filtered out, dst_weights falls back to uniform."""
+    import asyncio
+    from unittest.mock import patch
+
+    from app.services import generator as gen_module
+    from app.services.generator import AttackGenerator
+
+    queue = asyncio.Queue()
+    gen = AttackGenerator(queue)
+
+    # Force src_code to match ALL target countries, making dst_weights empty.
+    # We do this by making _TARGET_COUNTRIES_WEIGHTED contain only the same code
+    # as _SRC_CODES with uniform weights.
+    with (
+        patch.object(gen_module, "_SRC_CODES", ("US",)),
+        patch.object(gen_module, "_SRC_WEIGHTS", (1,)),
+        patch.object(gen_module, "_DST_CODES", ("US",)),
+        patch.object(gen_module, "_TARGET_COUNTRIES_WEIGHTED", [("US", 10)]),
+    ):
+        event = await gen.generate_event()
+
+    # The fallback should produce an event (dst_code will be "US" since it's the
+    # only candidate)
+    assert "source_ip" in event

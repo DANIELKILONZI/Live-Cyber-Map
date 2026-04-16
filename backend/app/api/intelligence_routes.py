@@ -119,8 +119,8 @@ async def get_news_by_country(
         logger.warning("DB news-by-country query failed for %s: %s", iso2, exc)
 
     # Fallback: filter in-memory aggregator cache by region or name
-    from app.services.news_aggregator import news_aggregator
     from app.services.country_risk import country_risk_service
+    from app.services.news_aggregator import news_aggregator
 
     country_name = ""
     score = await country_risk_service.get_country_score(iso2_upper)

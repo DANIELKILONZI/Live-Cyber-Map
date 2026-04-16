@@ -30,6 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal, engine, init_db
+from app.services.alert_service import alert_service
 from app.services.anomaly_detector import anomaly_detector
 from app.services.country_risk import country_risk_service
 from app.services.financial_data import financial_service
@@ -38,7 +39,6 @@ from app.services.news_aggregator import news_aggregator
 from app.services.ollama_service import ollama_service
 from app.services.processor import AttackProcessor
 from app.services.websocket_manager import ws_manager
-from app.services.alert_service import alert_service
 
 logging.basicConfig(
     level=logging.INFO,
@@ -130,6 +130,7 @@ async def lifespan(app: FastAPI):
     try:
         async with AsyncSessionLocal() as session:
             from sqlalchemy import select
+
             from app.models.alert import AlertRule
             result = await session.execute(select(AlertRule).where(AlertRule.enabled.is_(True)))
             rules = list(result.scalars().all())
@@ -242,11 +243,11 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     # REST routes
-    from app.api.routes import router as api_router
-    from app.api.intelligence_routes import router as intel_router
-    from app.api.financial_routes import router as financial_router
-    from app.api.layers_routes import router as layers_router
     from app.api.alert_routes import router as alert_router
+    from app.api.financial_routes import router as financial_router
+    from app.api.intelligence_routes import router as intel_router
+    from app.api.layers_routes import router as layers_router
+    from app.api.routes import router as api_router
 
     app.include_router(api_router, prefix="/api")
     app.include_router(intel_router, prefix="/api/intelligence")

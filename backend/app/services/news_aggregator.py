@@ -261,10 +261,6 @@ class NewsAggregator:
             return items
 
         # Support both RSS <item> and Atom <entry>
-        ns_map = {
-            "atom": "http://www.w3.org/2005/Atom",
-            "dc": "http://purl.org/dc/elements/1.1/",
-        }
         entries = (
             root.findall(".//item")
             or root.findall(".//entry")
@@ -313,7 +309,6 @@ class NewsAggregator:
 
     @staticmethod
     def _text(element: object, tags: List[str]) -> str:
-        import xml.etree.ElementTree as ET
         el = element  # type: ignore[assignment]
         for tag in tags:
             child = el.find(tag)  # type: ignore[union-attr]
@@ -323,7 +318,6 @@ class NewsAggregator:
 
     @staticmethod
     def _attr(element: object, tag: str, attr: str) -> str:
-        import xml.etree.ElementTree as ET
         el = element  # type: ignore[assignment]
         child = el.find(tag)  # type: ignore[union-attr]
         if child is not None:
@@ -335,8 +329,8 @@ class NewsAggregator:
         """Parse various date formats to Unix timestamp."""
         if not date_str:
             return time.time()
-        from email.utils import parsedate_to_datetime
         from datetime import timezone
+        from email.utils import parsedate_to_datetime
         try:
             return parsedate_to_datetime(date_str).timestamp()
         except Exception:
@@ -384,9 +378,10 @@ class NewsAggregator:
     async def _persist_news(items: List[NewsItem]) -> None:
         """Upsert news items into PostgreSQL (fire-and-forget)."""
         try:
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
+
             from app.core.database import AsyncSessionLocal
             from app.models.intelligence import NewsItemDB
-            from sqlalchemy.dialects.postgresql import insert as pg_insert
 
             async with AsyncSessionLocal() as session:
                 for item in items:

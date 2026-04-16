@@ -355,6 +355,37 @@ Arc **thickness** scales with event severity (1–10). Destination markers glow 
 
 ---
 
+## 🔒 Production Setup
+
+### Tauri auto-updater signing key
+
+The desktop updater requires an Ed25519 signing key pair.  Without it the
+auto-updater is inactive (safe, but no over-the-air updates).
+
+1. **Generate a key pair** on your local machine:
+   ```bash
+   tauri signer generate -w ~/.tauri/update-key.key
+   ```
+   This prints a base64-encoded **public key** and saves the private key to
+   `~/.tauri/update-key.key`.
+
+2. **Add the public key** to `src-tauri/tauri.conf.json`:
+   ```json
+   "updater": { "pubkey": "<paste-public-key-here>", ... }
+   ```
+
+3. **Add the private key as a GitHub Actions secret**:
+   - Name: `TAURI_PRIVATE_KEY`  — value: contents of `~/.tauri/update-key.key`
+   - Optional: `TAURI_KEY_PASSWORD` if you set a passphrase
+
+### Playwright preview testing
+
+Set a `BASE_URL` repository secret pointing to your Vercel/Railway preview
+deployment URL.  When the secret is present the Playwright CI job will run
+tests against that URL instead of spinning up a local `next start`.
+
+---
+
 ## 🤝 Contributing
 
 Contributions are welcome! For major changes, please open an issue first to discuss what you'd like to change.
